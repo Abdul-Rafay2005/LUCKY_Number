@@ -1,0 +1,33 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: a80c1c6eebb033c4d84c6ea65f3fe2d2, type: 3}
+  m_Name: DefaultGameSettings
+  m_EditorClassIdentifier: Assembly-CSharp::LuckyNumber.Core.GameSettings
+  minPlayers: 3
+  maxPlayers: 8
+  imposterCountSmallGame: 1
+  imposterCountLargeGame: 2
+  minLuckyTarget: 25
+  maxLuckyTarget: 55
+  startingMoves: 15
+  skipsPerPlayer: 1
+  turnDurationSeconds: 30
+  discussionDurationSeconds: 45
+  votingDurationSeconds: 25
+  roleRevealDurationSeconds: 4
+  eliminationDurationSeconds: 5
+  forcedBlockUsesPerMatch: 1
+  luckyShiftUsesPerMatch: 1
+  cursedDiceUsesPerMatch: 1
+  minShiftDelta: -5
+  maxShiftDelta: 5
+  cursedBiasStrength: 0.85

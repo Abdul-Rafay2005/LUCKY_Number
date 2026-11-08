@@ -1,0 +1,28 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!1045 &1
+EditorBuildSettings:
+  m_ObjectHideFlags: 0
+  serializedVersion: 2
+  m_Scenes:
+  - enabled: 1
+    path: Assets/Scenes/LuckyNumberMaster.unity
+    guid: 62ecc60f18ad59e468c707b9b69657d1
+  - enabled: 1
+    path: Assets/Scenes/MainMenu.unity
+    guid: 6868ef11736bc0745b63873f9278f94f
+  - enabled: 1
+    path: Assets/Scenes/Lobby.unity
+    guid: de7075fe7de62244290c1b9c234cb369
+  - enabled: 1
+    path: Assets/Scenes/Gameplay.unity
+    guid: 91a3fe3ab8995a14085624efd7abbfc1
+  - enabled: 1
+    path: Assets/Scenes/DiscussionAndVoting.unity
+    guid: 72b155134ac7d5d458b3a93edf22b751
+  - enabled: 1
+    path: Assets/Scenes/GameResults.unity
+    guid: f7ff2d760d3580542a4c12681ec5b30f
+  m_configObjects:
+    com.unity.input.settings.actions: {fileID: -944628639613478452, guid: 2bcd2660ca9b64942af0de543d8d7100, type: 3}
+  m_UseUCBPForAssetBundles: 0
