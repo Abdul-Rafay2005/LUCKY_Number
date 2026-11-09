@@ -1,5 +1,4 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using Unity.Collections;
@@ -58,20 +57,30 @@ namespace LuckyNumber.Network
         public NetworkVariable<PlayerRole> LastEliminatedRole = new NetworkVariable<PlayerRole>(
             PlayerRole.Normal, NetworkVariableReadPermission.Everyone, NetworkVariableWritePermission.Server);
 
-        // Server-only internal state
+        public readonly NetworkVariable<ActionStamp> ActionContext = new NetworkVariable<ActionStamp>();
+
+        private sealed class MatchPlayer
+        {
+            public PlayerSecret Secret;
+            public bool Alive = true;
+            public bool BlockPending;
+            public bool CursePending;
+        }
+
         private readonly List<ulong> turnOrder = new List<ulong>();
-        private int currentTurnOrderIndex = 0;
-        private readonly Dictionary<ulong, PlayerRole> serverRoles = new Dictionary<ulong, PlayerRole>();
-        private readonly Dictionary<ulong, int[]> serverActiveDice = new Dictionary<ulong, int[]>();
-        private readonly HashSet<ulong> serverCursedPlayers = new HashSet<ulong>();
-        private readonly Dictionary<ulong, ulong> serverVotes = new Dictionary<ulong, ulong>(); // voterId -> targetId
+        private int nextTurnIndex;
+        private PrivateRoll activeRoll;
+        private bool voteOpen;
+        private bool spawnedBefore;
+        private readonly Dictionary<ulong, MatchPlayer> serverPlayers = new Dictionary<ulong, MatchPlayer>();
+        private readonly Dictionary<ulong, ulong> serverVotes = new Dictionary<ulong, ulong>();
         private readonly HashSet<ulong> serverAbstainVotes = new HashSet<ulong>();
 
         public GameSettings Settings => settings;
 
-        public event Action<string> OnPublicLogMessage;
         public event Action<GamePhase> OnPhaseChanged;
         public event Action OnScoreUpdated;
+        public event Action<ActionStamp, MatchAction, bool, string> OnActionFeedback;
 
         private void Awake()
         {
@@ -92,28 +101,60 @@ namespace LuckyNumber.Network
         {
             base.OnNetworkSpawn();
 
-            CurrentGamePhase.OnValueChanged += (prev, next) => OnPhaseChanged?.Invoke(next);
-            CurrentScore.OnValueChanged += (prev, next) => OnScoreUpdated?.Invoke();
-            TargetLuckyNumber.OnValueChanged += (prev, next) => OnScoreUpdated?.Invoke();
-
             if (IsServer)
             {
-                NetworkManager.Singleton.OnClientDisconnectCallback += HandleServerClientDisconnect;
+                if (spawnedBefore) ReinitializeSceneVariables();
+                ActionContext.Value = new ActionStamp { SessionId = BitConverter.ToUInt64(Guid.NewGuid().ToByteArray(), 0) };
+                ResetMatch();
+                CurrentGamePhase.Value = GamePhase.Lobby;
+                NetworkManager.OnClientDisconnectCallback += HandleServerClientDisconnect;
             }
+            spawnedBefore = true;
+
+            CurrentGamePhase.OnValueChanged += NotifyPhaseChanged;
+            CurrentScore.OnValueChanged += NotifyScoreChanged;
+            TargetLuckyNumber.OnValueChanged += NotifyScoreChanged;
+            RemainingMoves.OnValueChanged += NotifyScoreChanged;
+            CurrentRound.OnValueChanged += NotifyScoreChanged;
+        }
+
+        private void ReinitializeSceneVariables()
+        {
+            // NGO retains send timestamps on reused scene objects, but each session has a new network clock.
+            var variables = new NetworkVariableBase[]
+            {
+                ActionContext, TargetLuckyNumber, CurrentScore, RemainingMoves, CurrentRound, ActivePlayerClientId,
+                CurrentGamePhase, PhaseTimer, WinningTeam, MatchWinReason, LastCommittedMove,
+                LastEliminatedPlayerName, LastEliminatedRole
+            };
+            foreach (var variable in variables)
+                variable.Initialize(this);
         }
 
         public override void OnNetworkDespawn()
         {
-            if (IsServer && NetworkManager.Singleton != null)
-            {
-                NetworkManager.Singleton.OnClientDisconnectCallback -= HandleServerClientDisconnect;
-            }
+            if (NetworkManager != null)
+                NetworkManager.OnClientDisconnectCallback -= HandleServerClientDisconnect;
+            CurrentGamePhase.OnValueChanged -= NotifyPhaseChanged;
+            CurrentScore.OnValueChanged -= NotifyScoreChanged;
+            TargetLuckyNumber.OnValueChanged -= NotifyScoreChanged;
+            RemainingMoves.OnValueChanged -= NotifyScoreChanged;
+            CurrentRound.OnValueChanged -= NotifyScoreChanged;
             base.OnNetworkDespawn();
+        }
+
+        private void NotifyPhaseChanged(GamePhase previous, GamePhase next) => OnPhaseChanged?.Invoke(next);
+        private void NotifyScoreChanged(int previous, int next) => OnScoreUpdated?.Invoke();
+
+        public override void OnDestroy()
+        {
+            if (Instance == this) Instance = null;
+            base.OnDestroy();
         }
 
         private void Update()
         {
-            if (!IsServer) return;
+            if (!IsSpawned || !IsServer || CurrentGamePhase.Value == GamePhase.MatchEnded) return;
 
             if (PhaseTimer.Value > 0f)
             {
@@ -129,97 +170,105 @@ namespace LuckyNumber.Network
         #region Match Initialization (Server Only)
 
         [ServerRpc(RequireOwnership = false)]
-        public void RequestStartMatchServerRpc(ServerRpcParams rpcParams = default)
+        public void RequestStartMatchServerRpc(ActionStamp stamp, ServerRpcParams rpcParams = default)
         {
-            if (!IsServer) return;
-            if (rpcParams.Receive.SenderClientId != NetworkManager.ServerClientId)
-            {
-                Debug.LogWarning("[NetworkGameManager] Only host can start match.");
-                return;
-            }
-
-            var connectedClients = NetworkManager.Singleton.ConnectedClientsIds;
-            if (connectedClients.Count < settings.minPlayers)
-            {
-                Debug.LogWarning($"[NetworkGameManager] Need at least {settings.minPlayers} players to start.");
-                return;
-            }
-
-            StartMatch();
+            TryStartMatch(rpcParams.Receive.SenderClientId, stamp, GamePhase.Lobby, MatchAction.Start);
         }
 
-        public void StartMatch()
+        [ServerRpc(RequireOwnership = false)]
+        public void RequestRematchServerRpc(ActionStamp stamp, ServerRpcParams rpcParams = default)
         {
-            if (!IsServer) return;
+            TryStartMatch(rpcParams.Receive.SenderClientId, stamp, GamePhase.MatchEnded, MatchAction.Rematch);
+        }
 
+        private void ResetMatch()
+        {
             WinningTeam.Value = Team.None;
             MatchWinReason.Value = WinReason.None;
             CurrentScore.Value = 0;
             RemainingMoves.Value = settings.startingMoves;
             CurrentRound.Value = 1;
-            TargetLuckyNumber.Value = UnityEngine.Random.Range(settings.minLuckyTarget, settings.maxLuckyTarget + 1);
-
-            serverRoles.Clear();
-            serverCursedPlayers.Clear();
+            TargetLuckyNumber.Value = 0;
+            PhaseTimer.Value = 0;
+            ActivePlayerClientId.Value = ulong.MaxValue;
+            LastEliminatedPlayerName.Value = string.Empty;
+            LastEliminatedRole.Value = PlayerRole.Normal;
+            LastCommittedMove.Value = string.Empty;
+            activeRoll = default;
+            voteOpen = false;
+            serverPlayers.Clear();
             serverVotes.Clear();
             serverAbstainVotes.Clear();
-            serverActiveDice.Clear();
-
-            // Assign roles
-            var clients = NetworkManager.Singleton.ConnectedClientsIds.ToList();
-            int imposterCount = settings.GetImposterCount(clients.Count);
-
-            // Shuffle clients
-            var shuffled = clients.OrderBy(x => UnityEngine.Random.value).ToList();
-            var imposters = shuffled.Take(imposterCount).ToList();
-            var normals = shuffled.Skip(imposterCount).ToList();
-
-            foreach (var imp in imposters) serverRoles[imp] = PlayerRole.Imposter;
-            foreach (var norm in normals) serverRoles[norm] = PlayerRole.Normal;
-
-            // Initialize player states
-            foreach (var client in clients)
-            {
-                var netPlayer = GetPlayer(client);
-                if (netPlayer != null)
-                {
-                    netPlayer.IsAlive.Value = true;
-                    netPlayer.RemainingSkips.Value = settings.skipsPerPlayer;
-                    netPlayer.IsBlockedNextTurn.Value = false;
-                    netPlayer.HasVoted.Value = false;
-                }
-            }
-
-            // Privately notify each client of their secret role
-            ulong[] imposterArray = imposters.ToArray();
-            foreach (var client in clients)
-            {
-                PlayerRole role = serverRoles[client];
-                var rpcParams = new ClientRpcParams
-                {
-                    Send = new ClientRpcSendParams { TargetClientIds = new[] { client } }
-                };
-
-                // Imposters know who the other imposters are; normals do not
-                ulong[] knownImposters = (role == PlayerRole.Imposter) ? imposterArray : Array.Empty<ulong>();
-
-                ReceiveSecretRoleClientRpc(
-                    role,
-                    knownImposters,
-                    settings.forcedBlockUsesPerMatch,
-                    settings.luckyShiftUsesPerMatch,
-                    settings.cursedDiceUsesPerMatch,
-                    rpcParams);
-            }
-
-            // Build initial turn order of living players
             turnOrder.Clear();
-            turnOrder.AddRange(shuffled);
-            currentTurnOrderIndex = 0;
+            nextTurnIndex = 0;
+        }
 
-            CurrentGamePhase.Value = GamePhase.RoleReveal;
+        private void TryStartMatch(ulong sender, ActionStamp stamp, GamePhase requiredPhase, MatchAction action)
+        {
+            if (!IsServer) return;
+            if (sender != Unity.Netcode.NetworkManager.ServerClientId || !IsHost)
+            {
+                SendFeedback(sender, stamp, action, false, "Only the host can start a match.");
+                return;
+            }
+            if (CurrentGamePhase.Value != requiredPhase || !stamp.Equals(ActionContext.Value))
+            {
+                SendFeedback(sender, stamp, action, false, "This match cannot be started now.");
+                return;
+            }
+            var clients = NetworkManager.ConnectedClientsIds;
+            if (clients.Count < settings.minPlayers || clients.Count > settings.maxPlayers)
+            {
+                SendFeedback(sender, stamp, action, false, $"A match needs {settings.minPlayers}–{settings.maxPlayers} players.");
+                return;
+            }
+            if (clients.Any(client => GetPlayer(client) == null))
+            {
+                SendFeedback(sender, stamp, action, false, "Wait for all players to finish joining.");
+                return;
+            }
+
+            ResetMatch();
+            var newStamp = ActionContext.Value;
+            newStamp.MatchId++;
+            newStamp.ActionId = 0;
+            ActionContext.Value = newStamp;
+            TargetLuckyNumber.Value = UnityEngine.Random.Range(settings.minLuckyTarget, settings.maxLuckyTarget + 1);
+
+            turnOrder.AddRange(clients.OrderBy(_ => UnityEngine.Random.value));
+            var imposters = clients.OrderBy(_ => UnityEngine.Random.value)
+                .Take(settings.GetImposterCount(clients.Count)).ToList();
+            foreach (ulong client in turnOrder)
+            {
+                bool isImposter = imposters.Contains(client);
+                var secret = new PlayerSecret
+                {
+                    HasRole = true,
+                    Role = isImposter ? PlayerRole.Imposter : PlayerRole.Normal,
+                    BlockCharges = isImposter ? settings.forcedBlockUsesPerMatch : 0,
+                    ShiftCharges = isImposter ? settings.luckyShiftUsesPerMatch : 0,
+                    CurseCharges = isImposter ? settings.cursedDiceUsesPerMatch : 0
+                };
+                if (isImposter)
+                {
+                    foreach (ulong teammate in imposters)
+                    {
+                        if (teammate != client) secret.KnownImposters.Add(teammate);
+                    }
+                }
+                serverPlayers.Add(client, new MatchPlayer { Secret = secret });
+                var player = GetPlayer(client);
+                player.IsAlive.Value = true;
+                player.RemainingSkips.Value = settings.skipsPerPlayer;
+                player.HasVoted.Value = false;
+                player.SetSecret(secret);
+                player.SetPrivateRoll(default);
+            }
+
             PhaseTimer.Value = settings.roleRevealDurationSeconds;
             LastCommittedMove.Value = $"Match started! Target Lucky Number is {TargetLuckyNumber.Value}.";
+            CurrentGamePhase.Value = GamePhase.RoleReveal;
+            SendFeedback(sender, stamp, action, true, "Match started.");
         }
 
         #endregion
@@ -228,143 +277,113 @@ namespace LuckyNumber.Network
 
         private void StartNextTurn()
         {
-            if (!IsServer) return;
-
-            // Check if win condition met
-            if (CheckWinCondition()) return;
-
-            // Filter living players
-            var livingPlayers = turnOrder.Where(id => IsPlayerAlive(id)).ToList();
-            if (livingPlayers.Count == 0)
+            if (!IsServer || CurrentGamePhase.Value == GamePhase.MatchEnded) return;
+            while (nextTurnIndex < turnOrder.Count)
             {
-                EndMatch(Team.ImposterTeam, WinReason.OutOfMoves);
+                ulong activeId = turnOrder[nextTurnIndex++];
+                if (!IsPlayerAlive(activeId)) continue;
+
+                var state = serverPlayers[activeId];
+                var player = GetPlayer(activeId);
+                if (state.BlockPending)
+                {
+                    state.BlockPending = false;
+                    RecordSkip(player);
+                    continue;
+                }
+
+                bool cursed = state.CursePending;
+                state.CursePending = false;
+                int[] dice = DiceRollGenerator.RollThreeDice(cursed, CurrentScore.Value, TargetLuckyNumber.Value, settings.cursedBiasStrength);
+                activeRoll = new PrivateRoll
+                {
+                    Stamp = AdvanceActionContext(),
+                    Die1 = dice[0],
+                    Die2 = dice[1],
+                    Die3 = dice[2],
+                    IsCursed = cursed
+                };
+                ActivePlayerClientId.Value = activeId;
+                player.SetPrivateRoll(activeRoll);
+                PhaseTimer.Value = settings.turnDurationSeconds;
+                CurrentGamePhase.Value = GamePhase.PlayerTurn;
                 return;
             }
-
-            // If we completed a full round of living players -> go to Discussion & Voting
-            if (currentTurnOrderIndex >= livingPlayers.Count)
-            {
-                currentTurnOrderIndex = 0;
-                StartDiscussionPhase();
-                return;
-            }
-
-            ulong activeId = livingPlayers[currentTurnOrderIndex];
-            ActivePlayerClientId.Value = activeId;
-            CurrentGamePhase.Value = GamePhase.PlayerTurn;
-            PhaseTimer.Value = settings.turnDurationSeconds;
-
-            var activePlayer = GetPlayer(activeId);
-
-            // Check if player is blocked by Forced Block
-            if (activePlayer != null && activePlayer.IsBlockedNextTurn.Value)
-            {
-                activePlayer.IsBlockedNextTurn.Value = false;
-                LastCommittedMove.Value = $"{activePlayer.PlayerName.Value} was blocked and skips their turn!";
-                // Forced block does not consume shared moves
-                currentTurnOrderIndex++;
-                StartNextTurn();
-                return;
-            }
-
-            // Generate authoritative dice
-            bool isCursed = serverCursedPlayers.Contains(activeId);
-            serverCursedPlayers.Remove(activeId); // Curse is consumed
-
-            int[] dice = DiceRollGenerator.RollThreeDice(isCursed, CurrentScore.Value, TargetLuckyNumber.Value, settings.cursedBiasStrength);
-            serverActiveDice[activeId] = dice;
-
-            // Send dice PRIVATELY to active player
-            var rpcParams = new ClientRpcParams
-            {
-                Send = new ClientRpcSendParams { TargetClientIds = new[] { activeId } }
-            };
-            ReceivePrivateDiceClientRpc(dice[0], dice[1], dice[2], isCursed, rpcParams);
+            StartDiscussionPhase();
         }
+
+        private void ClearActiveTurn()
+        {
+            activeRoll = default;
+            GetPlayer(ActivePlayerClientId.Value)?.SetPrivateRoll(default);
+            ActivePlayerClientId.Value = ulong.MaxValue;
+        }
+
+        private void RecordSkip(LuckyNetworkPlayer player) =>
+            LastCommittedMove.Value = $"{player.PlayerName.Value} skipped their turn.";
 
         #endregion
 
         #region Move Submissions & Skips (Authoritative ServerRpc)
 
         [ServerRpc(RequireOwnership = false)]
-        public void SubmitMoveServerRpc(int dieValue, bool isAddition, ServerRpcParams rpcParams = default)
+        public void SubmitMoveServerRpc(int dieValue, bool isAddition, ActionStamp stamp, ServerRpcParams rpcParams = default)
         {
-            if (!IsServer) return;
             ulong senderId = rpcParams.Receive.SenderClientId;
-
-            // Validation 1: Phase
-            if (CurrentGamePhase.Value != GamePhase.PlayerTurn)
+            if (!ValidateTurnAction(senderId, stamp, MatchAction.Move)) return;
+            if (dieValue != activeRoll.Die1 && dieValue != activeRoll.Die2 && dieValue != activeRoll.Die3)
             {
-                Debug.LogWarning("[NetworkGameManager] Move rejected: Not player turn phase.");
+                SendFeedback(senderId, stamp, MatchAction.Move, false, "Choose a die from the current roll.");
                 return;
             }
 
-            // Validation 2: Active player
-            if (senderId != ActivePlayerClientId.Value)
-            {
-                Debug.LogWarning($"[NetworkGameManager] Move rejected: Sender {senderId} is not active player {ActivePlayerClientId.Value}.");
-                return;
-            }
-
-            // Validation 3: Alive
-            if (!IsPlayerAlive(senderId)) return;
-
-            // Validation 4: Move pool
             if (RemainingMoves.Value <= 0)
             {
-                EndMatch(Team.ImposterTeam, WinReason.OutOfMoves);
+                SendFeedback(senderId, stamp, MatchAction.Move, false, "No shared moves remain.");
                 return;
             }
 
-            // Validation 5: Die belongs to server roll
-            if (!serverActiveDice.TryGetValue(senderId, out var roll) || !roll.Contains(dieValue))
-            {
-                Debug.LogWarning($"[NetworkGameManager] Move rejected: Die value {dieValue} not in authorized roll.");
-                return;
-            }
-
-            // Execute move
+            ClearActiveTurn();
             int delta = isAddition ? dieValue : -dieValue;
             CurrentScore.Value += delta;
             RemainingMoves.Value--;
-
-            var player = GetPlayer(senderId);
-            string pName = player != null ? player.PlayerName.Value.ToString() : $"Player {senderId}";
             string sign = isAddition ? "+" : "-";
-            LastCommittedMove.Value = $"{pName} played {sign}{dieValue} (Score: {CurrentScore.Value})";
+            LastCommittedMove.Value = $"{GetPlayer(senderId).PlayerName.Value} played {sign}{dieValue} (Score: {CurrentScore.Value})";
+            SendFeedback(senderId, stamp, MatchAction.Move, true, "Move accepted.");
 
-            serverActiveDice.Remove(senderId);
-
-            // Check if game ended immediately
-            if (CheckWinCondition()) return;
-
-            // Next turn
-            currentTurnOrderIndex++;
-            StartNextTurn();
+            if (CurrentScore.Value == TargetLuckyNumber.Value)
+                EndMatch(Team.NormalTeam, WinReason.TargetReached);
+            else if (RemainingMoves.Value <= 0)
+                EndMatch(Team.ImposterTeam, WinReason.OutOfMoves);
+            else
+                StartNextTurn();
         }
 
         [ServerRpc(RequireOwnership = false)]
-        public void RequestVoluntarySkipServerRpc(ServerRpcParams rpcParams = default)
+        public void RequestVoluntarySkipServerRpc(ActionStamp stamp, ServerRpcParams rpcParams = default)
         {
-            if (!IsServer) return;
             ulong senderId = rpcParams.Receive.SenderClientId;
-
-            if (CurrentGamePhase.Value != GamePhase.PlayerTurn || senderId != ActivePlayerClientId.Value) return;
-
+            if (!ValidateTurnAction(senderId, stamp, MatchAction.Skip)) return;
             var player = GetPlayer(senderId);
-            if (player == null || player.RemainingSkips.Value <= 0)
+            if (player.RemainingSkips.Value <= 0)
             {
-                Debug.LogWarning("[NetworkGameManager] Voluntary skip rejected: No skips remaining.");
+                SendFeedback(senderId, stamp, MatchAction.Skip, false, "No personal skips remain.");
                 return;
             }
 
-            // Consume skip allowance, does not consume shared moves
+            ClearActiveTurn();
             player.RemainingSkips.Value--;
-            LastCommittedMove.Value = $"{player.PlayerName.Value} voluntarily skipped their turn.";
-
-            serverActiveDice.Remove(senderId);
-            currentTurnOrderIndex++;
+            RecordSkip(player);
+            SendFeedback(senderId, stamp, MatchAction.Skip, true, "Skip accepted.");
             StartNextTurn();
+        }
+
+        private bool ValidateTurnAction(ulong sender, ActionStamp stamp, MatchAction action)
+        {
+            if (!ValidateAction(sender, stamp, action, GamePhase.PlayerTurn)) return false;
+            if (activeRoll.HasDice && ActivePlayerClientId.Value == sender) return true;
+            SendFeedback(sender, stamp, action, false, "Wait for your current roll.");
+            return false;
         }
 
         #endregion
@@ -372,73 +391,97 @@ namespace LuckyNumber.Network
         #region Imposter Abilities (Authoritative ServerRpc)
 
         [ServerRpc(RequireOwnership = false)]
-        public void ActivateForcedBlockServerRpc(ulong targetClientId, ServerRpcParams rpcParams = default)
+        public void ActivateForcedBlockServerRpc(ulong targetClientId, ActionStamp stamp, ServerRpcParams rpcParams = default)
         {
-            if (!IsServer) return;
-            ulong senderId = rpcParams.Receive.SenderClientId;
-
-            if (!IsImposter(senderId)) return;
-            var imposter = GetPlayer(senderId);
-            if (imposter == null || imposter.ForcedBlockCharges <= 0) return;
-
-            var target = GetPlayer(targetClientId);
-            if (target == null || !target.IsAlive.Value) return;
-
-            imposter.DecrementBlockCharge();
-            target.IsBlockedNextTurn.Value = true;
-
-            // Acknowledge to imposter only
-            SendAbilityFeedback(senderId, $"Forced Block primed on {target.PlayerName.Value}!");
+            ScheduleEffect(rpcParams.Receive.SenderClientId, targetClientId, stamp, MatchAction.ForcedBlock);
         }
 
         [ServerRpc(RequireOwnership = false)]
-        public void ActivateLuckyShiftServerRpc(int delta, ServerRpcParams rpcParams = default)
+        public void ActivateLuckyShiftServerRpc(int delta, ActionStamp stamp, ServerRpcParams rpcParams = default)
         {
-            if (!IsServer) return;
             ulong senderId = rpcParams.Receive.SenderClientId;
-
-            if (!IsImposter(senderId)) return;
-            var imposter = GetPlayer(senderId);
-            if (imposter == null || imposter.LuckyShiftCharges <= 0) return;
-
-            // Nonzero delta within bounds
-            if (delta == 0 || delta < settings.minShiftDelta || delta > settings.maxShiftDelta) return;
-
-            imposter.DecrementShiftCharge();
-            TargetLuckyNumber.Value += delta;
-
-            LastCommittedMove.Value = $"[LUCKY SHIFT] Target altered by {delta:+#;-#;0}! New Target: {TargetLuckyNumber.Value}";
-            SendAbilityFeedback(senderId, $"Target shifted by {delta}.");
-
-            CheckWinCondition();
-        }
-
-        [ServerRpc(RequireOwnership = false)]
-        public void ActivateCursedDiceServerRpc(ulong targetClientId, ServerRpcParams rpcParams = default)
-        {
-            if (!IsServer) return;
-            ulong senderId = rpcParams.Receive.SenderClientId;
-
-            if (!IsImposter(senderId)) return;
-            var imposter = GetPlayer(senderId);
-            if (imposter == null || imposter.CursedDiceCharges <= 0) return;
-
-            var target = GetPlayer(targetClientId);
-            if (target == null || !target.IsAlive.Value) return;
-
-            imposter.DecrementCursedCharge();
-            serverCursedPlayers.Add(targetClientId);
-
-            SendAbilityFeedback(senderId, $"Cursed Dice placed on {target.PlayerName.Value}!");
-        }
-
-        private void SendAbilityFeedback(ulong imposterId, string msg)
-        {
-            var rpcParams = new ClientRpcParams
+            const MatchAction action = MatchAction.LuckyShift;
+            if (!ValidateAbility(senderId, stamp, action, out var imposter)) return;
+            long target = (long)TargetLuckyNumber.Value + delta;
+            if (delta == 0 || delta < settings.minShiftDelta || delta > settings.maxShiftDelta ||
+                target < int.MinValue || target > int.MaxValue || target == CurrentScore.Value)
             {
-                Send = new ClientRpcSendParams { TargetClientIds = new[] { imposterId } }
+                SendFeedback(senderId, stamp, action, false, "Choose a nonzero shift that keeps the target different from the score.");
+                return;
+            }
+            imposter.Secret.ShiftCharges--;
+            SpendAbility(senderId, imposter);
+            TargetLuckyNumber.Value = (int)target;
+            LastCommittedMove.Value = $"[LUCKY SHIFT] Target altered by {delta:+#;-#;0}! New Target: {TargetLuckyNumber.Value}";
+            SendFeedback(senderId, stamp, action, true, $"Target shifted by {delta}.");
+        }
+
+        [ServerRpc(RequireOwnership = false)]
+        public void ActivateCursedDiceServerRpc(ulong targetClientId, ActionStamp stamp, ServerRpcParams rpcParams = default)
+        {
+            ScheduleEffect(rpcParams.Receive.SenderClientId, targetClientId, stamp, MatchAction.CursedDice);
+        }
+
+        private void ScheduleEffect(ulong sender, ulong targetId, ActionStamp stamp, MatchAction action)
+        {
+            if (!ValidateAbility(sender, stamp, action, out var imposter)) return;
+            if (!IsPlayerAlive(targetId))
+            {
+                SendFeedback(sender, stamp, action, false, "Choose a living player.");
+                return;
+            }
+            var target = serverPlayers[targetId];
+            bool isBlock = action == MatchAction.ForcedBlock;
+            if (isBlock ? target.BlockPending : target.CursePending)
+            {
+                SendFeedback(sender, stamp, action, false, "That effect is already pending for this player.");
+                return;
+            }
+
+            if (isBlock)
+            {
+                target.BlockPending = true;
+                imposter.Secret.BlockCharges--;
+            }
+            else
+            {
+                target.CursePending = true;
+                imposter.Secret.CurseCharges--;
+            }
+            SpendAbility(sender, imposter);
+            SendFeedback(sender, stamp, action, true, $"Effect queued for {GetPlayer(targetId).PlayerName.Value}'s next unrolled turn.");
+        }
+
+        private bool ValidateAbility(ulong sender, ActionStamp stamp, MatchAction action, out MatchPlayer imposter)
+        {
+            imposter = null;
+            if (!ValidateAction(sender, stamp, action, GamePhase.PlayerTurn)) return false;
+            imposter = serverPlayers[sender];
+            if (!activeRoll.HasDice || imposter.Secret.Role != PlayerRole.Imposter)
+            {
+                SendFeedback(sender, stamp, action, false, "Only living imposters can use abilities during a dice turn.");
+                return false;
+            }
+            if (imposter.Secret.LastAbilityRound == CurrentRound.Value)
+            {
+                SendFeedback(sender, stamp, action, false, "You already used an ability this round.");
+                return false;
+            }
+            int charges = action switch
+            {
+                MatchAction.ForcedBlock => imposter.Secret.BlockCharges,
+                MatchAction.LuckyShift => imposter.Secret.ShiftCharges,
+                _ => imposter.Secret.CurseCharges
             };
-            ReceiveAbilityFeedbackClientRpc(msg, rpcParams);
+            if (charges > 0) return true;
+            SendFeedback(sender, stamp, action, false, "No charges remain for that ability.");
+            return false;
+        }
+
+        private void SpendAbility(ulong sender, MatchPlayer imposter)
+        {
+            imposter.Secret.LastAbilityRound = CurrentRound.Value;
+            GetPlayer(sender).SetSecret(imposter.Secret);
         }
 
         #endregion
@@ -447,64 +490,67 @@ namespace LuckyNumber.Network
 
         private void StartDiscussionPhase()
         {
-            CurrentGamePhase.Value = GamePhase.Discussion;
+            ClearActiveTurn();
+            AdvanceActionContext();
             PhaseTimer.Value = settings.discussionDurationSeconds;
-            LastCommittedMove.Value = "Round finished. Discussion phase started!";
+            CurrentGamePhase.Value = GamePhase.Discussion;
         }
 
         private void StartVotingPhase()
         {
-            CurrentGamePhase.Value = GamePhase.Voting;
-            PhaseTimer.Value = settings.votingDurationSeconds;
+            AdvanceActionContext();
             serverVotes.Clear();
             serverAbstainVotes.Clear();
-
             foreach (var p in GetAllLivingPlayers())
             {
                 p.HasVoted.Value = false;
             }
-
+            voteOpen = true;
+            PhaseTimer.Value = settings.votingDurationSeconds;
             LastCommittedMove.Value = "Voting phase started! Cast your vote.";
+            CurrentGamePhase.Value = GamePhase.Voting;
         }
 
         [ServerRpc(RequireOwnership = false)]
-        public void SubmitVoteServerRpc(ulong suspectClientId, ServerRpcParams rpcParams = default)
+        public void SubmitVoteServerRpc(ulong suspectClientId, ActionStamp stamp, ServerRpcParams rpcParams = default)
         {
-            if (!IsServer || CurrentGamePhase.Value != GamePhase.Voting) return;
-            ulong voterId = rpcParams.Receive.SenderClientId;
-
-            if (!IsPlayerAlive(voterId)) return;
-            if (serverVotes.ContainsKey(voterId) || serverAbstainVotes.Contains(voterId)) return;
-
-            // Target must be alive
-            if (!IsPlayerAlive(suspectClientId)) return;
-
-            serverVotes[voterId] = suspectClientId;
-            var voter = GetPlayer(voterId);
-            if (voter != null) voter.HasVoted.Value = true;
-
-            CheckAllVotesSubmitted();
+            SubmitBallot(rpcParams.Receive.SenderClientId, suspectClientId, stamp);
         }
 
         [ServerRpc(RequireOwnership = false)]
-        public void SkipVoteServerRpc(ServerRpcParams rpcParams = default)
+        public void SkipVoteServerRpc(ActionStamp stamp, ServerRpcParams rpcParams = default)
         {
-            if (!IsServer || CurrentGamePhase.Value != GamePhase.Voting) return;
-            ulong voterId = rpcParams.Receive.SenderClientId;
+            SubmitBallot(rpcParams.Receive.SenderClientId, null, stamp);
+        }
 
-            if (!IsPlayerAlive(voterId)) return;
-            if (serverVotes.ContainsKey(voterId) || serverAbstainVotes.Contains(voterId)) return;
+        private void SubmitBallot(ulong voter, ulong? suspect, ActionStamp stamp)
+        {
+            const MatchAction action = MatchAction.Vote;
+            if (!ValidateAction(voter, stamp, action, GamePhase.Voting)) return;
+            if (!voteOpen || serverVotes.ContainsKey(voter) || serverAbstainVotes.Contains(voter))
+            {
+                SendFeedback(voter, stamp, action, false, "This ballot is closed or you already voted.");
+                return;
+            }
+            if (suspect.HasValue && !IsPlayerAlive(suspect.Value))
+            {
+                SendFeedback(voter, stamp, action, false, "Choose a living player.");
+                return;
+            }
 
-            serverAbstainVotes.Add(voterId);
-            var voter = GetPlayer(voterId);
-            if (voter != null) voter.HasVoted.Value = true;
+            if (suspect.HasValue)
+                serverVotes.Add(voter, suspect.Value);
+            else
+                serverAbstainVotes.Add(voter);
 
+            GetPlayer(voter).HasVoted.Value = true;
+            SendFeedback(voter, stamp, action, true, "Ballot accepted.");
             CheckAllVotesSubmitted();
         }
 
         private void CheckAllVotesSubmitted()
         {
-            int livingCount = GetAllLivingPlayers().Count;
+            int livingCount = serverPlayers.Values.Count(player => player.Alive);
             int totalVotes = serverVotes.Count + serverAbstainVotes.Count;
 
             if (totalVotes >= livingCount)
@@ -515,10 +561,10 @@ namespace LuckyNumber.Network
 
         private void ResolveVoting()
         {
-            if (!IsServer) return;
-
-            CurrentGamePhase.Value = GamePhase.Elimination;
-            PhaseTimer.Value = settings.eliminationDurationSeconds;
+            if (!IsServer || !voteOpen || CurrentGamePhase.Value != GamePhase.Voting) return;
+            voteOpen = false;
+            LastEliminatedPlayerName.Value = string.Empty;
+            LastEliminatedRole.Value = PlayerRole.Normal;
 
             // Tally votes
             var voteTally = new Dictionary<ulong, int>();
@@ -530,70 +576,50 @@ namespace LuckyNumber.Network
             if (voteTally.Count == 0)
             {
                 LastCommittedMove.Value = "No votes cast. No one was eliminated.";
-                LastEliminatedPlayerName.Value = string.Empty;
-                return;
-            }
-
-            int maxVotes = voteTally.Values.Max();
-            var topSuspects = voteTally.Where(kvp => kvp.Value == maxVotes).Select(kvp => kvp.Key).ToList();
-
-            // Tie handling: No elimination if tie
-            if (topSuspects.Count > 1)
-            {
-                LastCommittedMove.Value = $"Tie vote ({maxVotes} votes each). No one was eliminated.";
-                LastEliminatedPlayerName.Value = string.Empty;
             }
             else
             {
-                ulong eliminatedId = topSuspects[0];
-                var targetPlayer = GetPlayer(eliminatedId);
-                PlayerRole revealedRole = serverRoles.GetValueOrDefault(eliminatedId, PlayerRole.Normal);
-
-                if (targetPlayer != null)
-                {
-                    targetPlayer.IsAlive.Value = false;
-                    LastEliminatedPlayerName.Value = targetPlayer.PlayerName.Value;
-                    LastEliminatedRole.Value = revealedRole;
-                    LastCommittedMove.Value = $"{targetPlayer.PlayerName.Value} was eliminated! They were {revealedRole}.";
-                }
+                int maxVotes = voteTally.Values.Max();
+                var topSuspects = voteTally.Where(kvp => kvp.Value == maxVotes).Select(kvp => kvp.Key).ToList();
+                if (topSuspects.Count > 1)
+                    LastCommittedMove.Value = $"Tie vote ({maxVotes} votes each). No one was eliminated.";
+                else
+                    Eliminate(topSuspects[0]);
             }
 
-            // Check win conditions after elimination
-            if (CheckWinCondition()) return;
+            if (CheckRoleWins()) return;
+            PhaseTimer.Value = settings.eliminationDurationSeconds;
+            CurrentGamePhase.Value = GamePhase.Elimination;
+        }
+
+        private void Eliminate(ulong clientId)
+        {
+            var player = GetPlayer(clientId);
+            if (player == null) return;
+            var state = serverPlayers[clientId];
+            state.Alive = false;
+            state.BlockPending = false;
+            state.CursePending = false;
+            player.IsAlive.Value = false;
+            LastEliminatedPlayerName.Value = player.PlayerName.Value;
+            LastEliminatedRole.Value = state.Secret.Role;
+            LastCommittedMove.Value = $"{player.PlayerName.Value} was eliminated! They were {state.Secret.Role}.";
         }
 
         #endregion
 
         #region Win Conditions & Phase Resolution
 
-        private bool CheckWinCondition()
+        private bool CheckRoleWins()
         {
-            if (!IsServer) return false;
-
-            // Win Condition 1: Target Reached exactly -> Normal Team wins!
-            if (CurrentScore.Value == TargetLuckyNumber.Value)
-            {
-                EndMatch(Team.NormalTeam, WinReason.TargetReached);
-                return true;
-            }
-
-            // Win Condition 2: Remaining moves reached zero -> Imposter Team wins!
-            if (RemainingMoves.Value <= 0)
-            {
-                EndMatch(Team.ImposterTeam, WinReason.OutOfMoves);
-                return true;
-            }
-
-            // Win Condition 3: All Imposters eliminated -> Normal Team wins!
-            int livingImposters = GetAllLivingPlayers().Count(p => serverRoles.GetValueOrDefault(p.OwnerClientId, PlayerRole.Normal) == PlayerRole.Imposter);
+            int livingImposters = serverPlayers.Values.Count(player => player.Alive && player.Secret.Role == PlayerRole.Imposter);
             if (livingImposters == 0)
             {
                 EndMatch(Team.NormalTeam, WinReason.AllImpostersEliminated);
                 return true;
             }
 
-            // Win Condition 4: Imposter parity (living imposters >= living normals) -> Imposters win!
-            int livingNormals = GetAllLivingPlayers().Count(p => serverRoles.GetValueOrDefault(p.OwnerClientId, PlayerRole.Normal) == PlayerRole.Normal);
+            int livingNormals = serverPlayers.Values.Count(player => player.Alive && player.Secret.Role == PlayerRole.Normal);
             if (livingImposters >= livingNormals)
             {
                 EndMatch(Team.ImposterTeam, WinReason.ImposterParity);
@@ -605,9 +631,11 @@ namespace LuckyNumber.Network
 
         private void EndMatch(Team winner, WinReason reason)
         {
+            if (CurrentGamePhase.Value == GamePhase.MatchEnded) return;
+            ClearActiveTurn();
+            voteOpen = false;
             WinningTeam.Value = winner;
             MatchWinReason.Value = reason;
-            CurrentGamePhase.Value = GamePhase.MatchEnded;
             PhaseTimer.Value = 0f;
 
             string reasonText = reason switch
@@ -620,6 +648,7 @@ namespace LuckyNumber.Network
             };
 
             LastCommittedMove.Value = $"Game Over! {winner} Wins — {reasonText}";
+            CurrentGamePhase.Value = GamePhase.MatchEnded;
         }
 
         private void HandlePhaseTimerExpired()
@@ -634,8 +663,8 @@ namespace LuckyNumber.Network
 
                 case GamePhase.PlayerTurn:
                     // Auto-skip on turn timeout
+                    ClearActiveTurn();
                     LastCommittedMove.Value = $"Player turn timed out. Automatically skipped.";
-                    currentTurnOrderIndex++;
                     StartNextTurn();
                     break;
 
@@ -648,12 +677,9 @@ namespace LuckyNumber.Network
                     break;
 
                 case GamePhase.Elimination:
-                    if (!CheckWinCondition())
-                    {
-                        CurrentRound.Value++;
-                        currentTurnOrderIndex = 0;
-                        StartNextTurn();
-                    }
+                    CurrentRound.Value++;
+                    nextTurnIndex = 0;
+                    StartNextTurn();
                     break;
             }
         }
@@ -664,87 +690,90 @@ namespace LuckyNumber.Network
 
         private void HandleServerClientDisconnect(ulong clientId)
         {
-            if (!IsServer) return;
-            Debug.Log($"[NetworkGameManager] Client {clientId} disconnected.");
+            var phase = CurrentGamePhase.Value;
+            if (!IsServer || NetworkManager.ShutdownInProgress || phase == GamePhase.Lobby ||
+                phase == GamePhase.MatchEnded || !serverPlayers.Remove(clientId, out var departed))
+                return;
 
-            if (ActivePlayerClientId.Value == clientId && CurrentGamePhase.Value == GamePhase.PlayerTurn)
+            serverVotes.Remove(clientId);
+            serverAbstainVotes.Remove(clientId);
+            foreach (ulong voterId in serverVotes.Where(vote => vote.Value == clientId).Select(vote => vote.Key).ToList())
             {
-                currentTurnOrderIndex++;
-                StartNextTurn();
+                serverVotes.Remove(voterId);
+                var voter = GetPlayer(voterId);
+                if (voter != null)
+                {
+                    voter.HasVoted.Value = false;
+                    if (phase == GamePhase.Voting)
+                        SendFeedback(voterId, ActionContext.Value, MatchAction.Vote, false, "Your candidate left. Choose another player or skip.");
+                }
             }
 
-            CheckWinCondition();
+            if (departed.Alive && CheckRoleWins()) return;
+            if (phase == GamePhase.PlayerTurn && ActivePlayerClientId.Value == clientId)
+            {
+                ClearActiveTurn();
+                StartNextTurn();
+            }
+            else if (phase == GamePhase.Voting)
+                CheckAllVotesSubmitted();
         }
+
+        internal bool IsInCurrentMatch(ulong clientId) => serverPlayers.ContainsKey(clientId);
 
         public LuckyNetworkPlayer GetPlayer(ulong clientId)
         {
-            if (NetworkManager.Singleton != null && NetworkManager.Singleton.ConnectedClients.TryGetValue(clientId, out var client))
-            {
-                return client.PlayerObject != null ? client.PlayerObject.GetComponent<LuckyNetworkPlayer>() : null;
-            }
-            return null;
+            if (IsServer && !NetworkManager.ConnectedClients.ContainsKey(clientId)) return null;
+            return LuckyNetworkPlayer.FindSpawnedPlayer(clientId);
         }
 
         public List<LuckyNetworkPlayer> GetAllLivingPlayers()
         {
-            var list = new List<LuckyNetworkPlayer>();
-            if (NetworkManager.Singleton == null) return list;
-
-            foreach (var client in NetworkManager.Singleton.ConnectedClients.Values)
-            {
-                if (client.PlayerObject != null)
-                {
-                    var p = client.PlayerObject.GetComponent<LuckyNetworkPlayer>();
-                    if (p != null && p.IsAlive.Value) list.Add(p);
-                }
-            }
-            return list;
+            return LuckyNetworkPlayer.SpawnedPlayers.Values
+                .Where(player => player.IsAlive.Value && (!IsServer || NetworkManager.ConnectedClients.ContainsKey(player.OwnerClientId)))
+                .ToList();
         }
 
         private bool IsPlayerAlive(ulong clientId)
         {
-            var p = GetPlayer(clientId);
-            return p != null && p.IsAlive.Value;
+            return serverPlayers.TryGetValue(clientId, out var player) && player.Alive && GetPlayer(clientId) != null;
         }
 
-        private bool IsImposter(ulong clientId) => serverRoles.GetValueOrDefault(clientId, PlayerRole.Normal) == PlayerRole.Imposter;
-
-        #endregion
-
-        #region Targeted ClientRpc Implementations
-
-        [ClientRpc]
-        private void ReceiveSecretRoleClientRpc(
-            PlayerRole role,
-            ulong[] otherImposters,
-            int blockCharges,
-            int shiftCharges,
-            int cursedCharges,
-            ClientRpcParams rpcParams = default)
+        private ActionStamp AdvanceActionContext()
         {
-            var localPlayer = NetworkManager.Singleton?.LocalClient?.PlayerObject?.GetComponent<LuckyNetworkPlayer>();
-            if (localPlayer != null)
+            var stamp = ActionContext.Value;
+            stamp.ActionId++;
+            ActionContext.Value = stamp;
+            return stamp;
+        }
+
+        private bool ValidateAction(ulong sender, ActionStamp stamp, MatchAction action, GamePhase phase)
+        {
+            if (!IsServer || !NetworkManager.ConnectedClients.ContainsKey(sender)) return false;
+            if (CurrentGamePhase.Value != phase || !stamp.Equals(ActionContext.Value))
             {
-                localPlayer.SetLocalRole(role, blockCharges, shiftCharges, cursedCharges);
+                SendFeedback(sender, stamp, action, false, "That action window has ended.");
+                return false;
             }
-            Debug.Log($"[NetworkGameManager] Received Secret Role: {role}");
+            if (IsPlayerAlive(sender)) return true;
+            SendFeedback(sender, stamp, action, false, "Only living players can take this action.");
+            return false;
         }
 
-        [ClientRpc]
-        private void ReceivePrivateDiceClientRpc(int d1, int d2, int d3, bool isCursed, ClientRpcParams rpcParams = default)
+        private void SendFeedback(ulong recipient, ActionStamp stamp, MatchAction action, bool accepted, string message)
         {
-            var localPlayer = NetworkManager.Singleton?.LocalClient?.PlayerObject?.GetComponent<LuckyNetworkPlayer>();
-            if (localPlayer != null)
+            if (!NetworkManager.ConnectedClients.ContainsKey(recipient)) return;
+            var rpcParams = new ClientRpcParams
             {
-                localPlayer.SetLocalDice(new[] { d1, d2, d3 }, isCursed);
-            }
+                Send = new ClientRpcSendParams { TargetClientIds = new[] { recipient } }
+            };
+            ReceiveActionFeedbackClientRpc(stamp, action, accepted, message, rpcParams);
         }
 
         [ClientRpc]
-        private void ReceiveAbilityFeedbackClientRpc(string message, ClientRpcParams rpcParams = default)
+        private void ReceiveActionFeedbackClientRpc(ActionStamp stamp, MatchAction action, bool accepted, string message, ClientRpcParams rpcParams = default)
         {
-            Debug.Log($"[NetworkGameManager] Ability Feedback: {message}");
-            OnPublicLogMessage?.Invoke(message);
+            OnActionFeedback?.Invoke(stamp, action, accepted, message);
         }
 
         #endregion

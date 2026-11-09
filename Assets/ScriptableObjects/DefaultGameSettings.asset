@@ -31,3 +31,9 @@ MonoBehaviour:
   minShiftDelta: -5
   maxShiftDelta: 5
   cursedBiasStrength: 0.85
+  turnTimeoutPolicy: 1
+  personalSkipPolicy: 1
+  shiftBudgetScope: 1
+  jamCursedDiceUsesPerMatch: 2
+  abilityActivationsPerImposterPerRound: 1
+  shiftReconsiderationSeconds: 10

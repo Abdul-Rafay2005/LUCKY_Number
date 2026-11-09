@@ -147,14 +147,6 @@ MonoBehaviour:
   IsAlive:
     m_InternalValue: 1
   RemainingSkips:
-    m_InternalValue: 1
-  IsBlockedNextTurn:
     m_InternalValue: 0
   HasVoted:
     m_InternalValue: 0
-  localRole: 0
-  forcedBlockCharges: 1
-  luckyShiftCharges: 1
-  cursedDiceCharges: 1
-  currentDice: 000000000000000000000000
-  isCursedThisTurn: 0

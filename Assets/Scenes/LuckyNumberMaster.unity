@@ -8199,7 +8199,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::LuckyNumber.Network.NetworkGameManager
   ShowTopMostFoldoutHeaderGroup: 1
-  settings: {fileID: 0}
+  settings: {fileID: 11400000, guid: d3a466fc4efcac541b10bf70253b20c1, type: 2}
   TargetLuckyNumber:
     m_InternalValue: 0
   CurrentScore:
@@ -15101,7 +15101,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: HOST LOCAL
+  m_text: HOST LOCAL TEST
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 8f586378b4e144a9851e7b34d9b748ee, type: 2}
   m_sharedMaterial: {fileID: 2180264, guid: 8f586378b4e144a9851e7b34d9b748ee, type: 2}
@@ -15238,7 +15238,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: JOIN LOCAL
+  m_text: JOIN LOCAL TEST
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 8f586378b4e144a9851e7b34d9b748ee, type: 2}
   m_sharedMaterial: {fileID: 2180264, guid: 8f586378b4e144a9851e7b34d9b748ee, type: 2}

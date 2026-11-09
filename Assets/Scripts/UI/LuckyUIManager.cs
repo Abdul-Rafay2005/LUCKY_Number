@@ -23,7 +23,9 @@ namespace LuckyNumber.UI
         [SerializeField] private GameObject howToPlayModal;
         [SerializeField] private GameObject settingsModal;
 
-        private bool _subscribedToGameManager = false;
+        private NetworkGameManager game;
+        private NetworkLobbyManager room;
+        private bool inRoom;
 
         private void Awake()
         {
@@ -38,27 +40,55 @@ namespace LuckyNumber.UI
         private void Start()
         {
             ShowMainMenu();
-
-            if (NetworkLobbyManager.Instance != null)
-            {
-                NetworkLobbyManager.Instance.OnRoomJoined += HandleRoomJoined;
-                NetworkLobbyManager.Instance.OnLeftRoom += ShowMainMenu;
-            }
+            Update();
         }
 
         private void Update()
         {
-            // NetworkGameManager spawns after network starts — subscribe once available
-            if (!_subscribedToGameManager && NetworkGameManager.Instance != null)
+            var nextRoom = NetworkLobbyManager.Instance;
+            if (!ReferenceEquals(room, nextRoom))
             {
-                NetworkGameManager.Instance.OnPhaseChanged += HandlePhaseChanged;
-                _subscribedToGameManager = true;
-                Debug.Log("[LuckyUIManager] Subscribed to NetworkGameManager phase changes.");
+                BindRoom(nextRoom);
             }
+            var next = NetworkGameManager.Instance;
+            BindGame(next != null && next.IsSpawned ? next : null);
+        }
+
+        private void BindRoom(NetworkLobbyManager next)
+        {
+            if (!ReferenceEquals(room, null))
+            {
+                room.OnRoomJoined -= HandleRoomJoined;
+                room.OnLeftRoom -= HandleRoomLeft;
+            }
+            room = next;
+            if (room != null)
+            {
+                room.OnRoomJoined += HandleRoomJoined;
+                room.OnLeftRoom += HandleRoomLeft;
+                if (room.State == RoomConnectionState.InRoom)
+                    HandleRoomJoined(room.CurrentRoomCode);
+            }
+            else if (inRoom)
+            {
+                HandleRoomLeft();
+            }
+        }
+
+        private void BindGame(NetworkGameManager next)
+        {
+            if (ReferenceEquals(game, next)) return;
+            if (!ReferenceEquals(game, null))
+                game.OnPhaseChanged -= HandlePhaseChanged;
+            game = next;
+            if (game == null) return;
+            game.OnPhaseChanged += HandlePhaseChanged;
+            HandlePhaseChanged(game.CurrentGamePhase.Value);
         }
 
         private void HandlePhaseChanged(GamePhase newPhase)
         {
+            if (!inRoom) return;
             Debug.Log($"[LuckyUIManager] Phase changed to: {newPhase}");
             switch (newPhase)
             {
@@ -73,7 +103,6 @@ namespace LuckyNumber.UI
                     ShowGameplay();
                     break;
                 case GamePhase.Discussion:
-                    ShowGameplay(); // Keep gameplay panel visible under discussion
                     ShowDiscussion();
                     break;
                 case GamePhase.Voting:
@@ -90,62 +119,44 @@ namespace LuckyNumber.UI
 
         private void OnDestroy()
         {
-            if (NetworkLobbyManager.Instance != null)
-            {
-                NetworkLobbyManager.Instance.OnRoomJoined -= HandleRoomJoined;
-                NetworkLobbyManager.Instance.OnLeftRoom -= ShowMainMenu;
-            }
-            if (NetworkGameManager.Instance != null)
-            {
-                NetworkGameManager.Instance.OnPhaseChanged -= HandlePhaseChanged;
-            }
+            BindRoom(null);
+            BindGame(null);
+            if (Instance == this) Instance = null;
         }
 
         public void ShowMainMenu()
         {
-            HideAll();
-            if (mainMenuPanel != null) mainMenuPanel.SetActive(true);
+            SetPanels(menu: true);
         }
 
         public void ShowLobby()
         {
-            HideAll();
-            if (lobbyPanel != null) lobbyPanel.SetActive(true);
+            SetPanels(lobby: true);
         }
 
         public void ShowGameplay()
         {
-            HideAll();
-            if (gameplayPanel != null) gameplayPanel.SetActive(true);
+            SetPanels(gameplay: true);
         }
 
         public void ShowDiscussion()
         {
-            HideAll();
-            if (gameplayPanel != null) gameplayPanel.SetActive(true);
-            if (discussionPanel != null) discussionPanel.SetActive(true);
-            if (votingPanel != null) votingPanel.SetActive(false);
-            if (eliminationModal != null) eliminationModal.SetActive(false);
+            SetPanels(gameplay: true, discussion: true);
         }
 
         public void ShowVoting()
         {
-            HideAll();
-            if (gameplayPanel != null) gameplayPanel.SetActive(true);
-            if (discussionPanel != null) discussionPanel.SetActive(false);
-            if (votingPanel != null) votingPanel.SetActive(true);
-            if (eliminationModal != null) eliminationModal.SetActive(false);
+            SetPanels(gameplay: true, voting: true);
         }
 
         public void ShowElimination()
         {
-            if (eliminationModal != null) eliminationModal.SetActive(true);
+            SetPanels(gameplay: true, voting: true, elimination: true);
         }
 
         public void ShowResults()
         {
-            HideAll();
-            if (resultsPanel != null) resultsPanel.SetActive(true);
+            SetPanels(results: true);
         }
 
         public void ToggleHowToPlay(bool show)
@@ -158,22 +169,30 @@ namespace LuckyNumber.UI
             if (settingsModal != null) settingsModal.SetActive(show);
         }
 
-        private void HideAll()
+        private void SetPanels(bool menu = false, bool lobby = false, bool gameplay = false,
+            bool discussion = false, bool voting = false, bool elimination = false, bool results = false)
         {
-            if (mainMenuPanel != null) mainMenuPanel.SetActive(false);
-            if (lobbyPanel != null) lobbyPanel.SetActive(false);
-            if (gameplayPanel != null) gameplayPanel.SetActive(false);
-            if (discussionPanel != null) discussionPanel.SetActive(false);
-            if (votingPanel != null) votingPanel.SetActive(false);
-            if (eliminationModal != null) eliminationModal.SetActive(false);
-            if (resultsPanel != null) resultsPanel.SetActive(false);
-            if (howToPlayModal != null) howToPlayModal.SetActive(false);
-            if (settingsModal != null) settingsModal.SetActive(false);
+            if (mainMenuPanel != null) mainMenuPanel.SetActive(menu);
+            if (lobbyPanel != null) lobbyPanel.SetActive(lobby);
+            if (gameplayPanel != null) gameplayPanel.SetActive(gameplay);
+            if (discussionPanel != null) discussionPanel.SetActive(discussion);
+            if (votingPanel != null) votingPanel.SetActive(voting);
+            if (eliminationModal != null) eliminationModal.SetActive(elimination);
+            if (resultsPanel != null) resultsPanel.SetActive(results);
+            ToggleHowToPlay(false);
+            ToggleSettings(false);
         }
 
         private void HandleRoomJoined(string roomCode)
         {
-            ShowLobby();
+            inRoom = true;
+            HandlePhaseChanged(game != null ? game.CurrentGamePhase.Value : GamePhase.Lobby);
+        }
+
+        private void HandleRoomLeft()
+        {
+            inRoom = false;
+            ShowMainMenu();
         }
     }
 }
