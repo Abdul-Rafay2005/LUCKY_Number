@@ -2,6 +2,24 @@ using UnityEngine;
 
 namespace LuckyNumber.Core
 {
+    public enum TurnTimeoutPolicy
+    {
+        SkipTurn,
+        RandomSignedMove
+    }
+
+    public enum PersonalSkipPolicy
+    {
+        Fixed,
+        OnePerFourStartingPlayersRoundedUp
+    }
+
+    public enum ShiftBudgetScope
+    {
+        PerImposter,
+        ImposterTeam
+    }
+
     [CreateAssetMenu(fileName = "GameSettings", menuName = "LuckyNumber/GameSettings")]
     public class GameSettings : ScriptableObject
     {
@@ -42,7 +60,7 @@ namespace LuckyNumber.Core
         public float votingDurationSeconds = 25f;
 
         [Tooltip("Brief pause for role reveal splash at start.")]
-        public float roleRevealDurationSeconds = 5f;
+        public float roleRevealDurationSeconds = 4f;
 
         [Tooltip("Seconds to display elimination result.")]
         public float eliminationDurationSeconds = 5f;
@@ -67,6 +85,49 @@ namespace LuckyNumber.Core
         [Tooltip("Chance (0 to 1) that cursed die roll favors unfavorable value.")]
         [Range(0f, 1f)]
         public float cursedBiasStrength = 0.85f;
+
+        [Header("Jam Rule Policies (Phases 2–3)")]
+        public TurnTimeoutPolicy turnTimeoutPolicy = TurnTimeoutPolicy.RandomSignedMove;
+        public PersonalSkipPolicy personalSkipPolicy = PersonalSkipPolicy.OnePerFourStartingPlayersRoundedUp;
+        public ShiftBudgetScope shiftBudgetScope = ShiftBudgetScope.ImposterTeam;
+        [Tooltip("Cursed Dice charges after the server-owned ability budgets are implemented.")]
+        public int jamCursedDiceUsesPerMatch = 2;
+        public int abilityActivationsPerImposterPerRound = 1;
+        public float shiftReconsiderationSeconds = 10f;
+
+        private void OnValidate()
+        {
+            minPlayers = Mathf.Max(3, minPlayers);
+            maxPlayers = Mathf.Max(minPlayers, maxPlayers);
+            // Bound each role count at the smallest player count in its tier.
+            imposterCountSmallGame = Mathf.Clamp(imposterCountSmallGame, 1, (Mathf.Min(minPlayers, 5) - 1) / 2);
+            imposterCountLargeGame = Mathf.Clamp(imposterCountLargeGame, 1, (Mathf.Max(minPlayers, 6) - 1) / 2);
+
+            minLuckyTarget = Mathf.Clamp(minLuckyTarget, 1, int.MaxValue - 1);
+            maxLuckyTarget = Mathf.Clamp(maxLuckyTarget, minLuckyTarget, int.MaxValue - 1);
+            startingMoves = Mathf.Max(1, startingMoves);
+            skipsPerPlayer = Mathf.Max(0, skipsPerPlayer);
+
+            turnDurationSeconds = PositiveSeconds(turnDurationSeconds, 30f);
+            discussionDurationSeconds = PositiveSeconds(discussionDurationSeconds, 45f);
+            votingDurationSeconds = PositiveSeconds(votingDurationSeconds, 25f);
+            roleRevealDurationSeconds = PositiveSeconds(roleRevealDurationSeconds, 4f);
+            eliminationDurationSeconds = PositiveSeconds(eliminationDurationSeconds, 5f);
+            shiftReconsiderationSeconds = PositiveSeconds(shiftReconsiderationSeconds, 10f);
+
+            forcedBlockUsesPerMatch = Mathf.Max(0, forcedBlockUsesPerMatch);
+            luckyShiftUsesPerMatch = Mathf.Max(0, luckyShiftUsesPerMatch);
+            cursedDiceUsesPerMatch = Mathf.Max(0, cursedDiceUsesPerMatch);
+            jamCursedDiceUsesPerMatch = Mathf.Max(0, jamCursedDiceUsesPerMatch);
+            abilityActivationsPerImposterPerRound = Mathf.Max(0, abilityActivationsPerImposterPerRound);
+            minShiftDelta = Mathf.Clamp(minShiftDelta, -5, -1);
+            maxShiftDelta = Mathf.Clamp(maxShiftDelta, 1, 5);
+        }
+
+        private static float PositiveSeconds(float seconds, float fallback)
+        {
+            return seconds > 0f && !float.IsInfinity(seconds) ? seconds : fallback;
+        }
 
         /// <summary>
         /// Calculates the number of imposters based on total player count.

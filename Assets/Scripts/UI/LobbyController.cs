@@ -3,6 +3,7 @@ using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 using Unity.Netcode;
+using LuckyNumber.Core;
 using LuckyNumber.Network;
 using LuckyNumber.Audio;
 
@@ -30,7 +31,6 @@ namespace LuckyNumber.UI
         [SerializeField] private TMP_Text statusMessageText;
 
         private readonly List<GameObject> activePlayerCards = new List<GameObject>();
-        private bool isLocalReady = false;
 
         private void OnEnable()
         {
@@ -38,12 +38,6 @@ namespace LuckyNumber.UI
             if (readyButton != null) readyButton.onClick.AddListener(OnToggleReady);
             if (startMatchButton != null) startMatchButton.onClick.AddListener(OnStartMatchClicked);
             if (leaveRoomButton != null) leaveRoomButton.onClick.AddListener(OnLeaveRoom);
-
-            if (NetworkManager.Singleton != null)
-            {
-                NetworkManager.Singleton.OnClientConnectedCallback += HandleClientListChanged;
-                NetworkManager.Singleton.OnClientDisconnectCallback += HandleClientListChanged;
-            }
 
             UpdateLobbyView();
         }
@@ -55,11 +49,6 @@ namespace LuckyNumber.UI
             if (startMatchButton != null) startMatchButton.onClick.RemoveListener(OnStartMatchClicked);
             if (leaveRoomButton != null) leaveRoomButton.onClick.RemoveListener(OnLeaveRoom);
 
-            if (NetworkManager.Singleton != null)
-            {
-                NetworkManager.Singleton.OnClientConnectedCallback -= HandleClientListChanged;
-                NetworkManager.Singleton.OnClientDisconnectCallback -= HandleClientListChanged;
-            }
         }
 
         private void Update()
@@ -77,32 +66,34 @@ namespace LuckyNumber.UI
 
             if (NetworkManager.Singleton == null || !NetworkManager.Singleton.IsListening) return;
 
-            int connectedCount = NetworkManager.Singleton.ConnectedClients.Count;
-            int minNeeded = NetworkGameManager.Instance != null && NetworkGameManager.Instance.Settings != null
-                ? NetworkGameManager.Instance.Settings.minPlayers
-                : 3;
+            int connectedCount = LuckyNetworkPlayer.SpawnedPlayers.Count;
+            var game = NetworkGameManager.Instance;
+            var settings = game != null ? game.Settings : null;
+            int minNeeded = settings != null ? settings.minPlayers : 3;
+            int maxAllowed = settings != null ? settings.maxPlayers : 8;
 
             if (playerCountText != null)
             {
-                playerCountText.text = $"Players: {connectedCount} / 8 (Min: {minNeeded})";
+                playerCountText.text = $"Players: {connectedCount} / {maxAllowed} (Min: {minNeeded})";
             }
+            var local = LuckyNetworkPlayer.LocalPlayer;
+            bool inLobby = game != null && game.IsSpawned && game.CurrentGamePhase.Value == GamePhase.Lobby;
+            if (readyButton != null) readyButton.interactable = inLobby && local != null;
+            if (readyButtonText != null) readyButtonText.text = local != null && local.IsReady.Value ? "UNREADY" : "READY";
 
             bool isHost = NetworkManager.Singleton.IsHost;
 
             if (startMatchButton != null)
             {
                 startMatchButton.gameObject.SetActive(isHost);
-                // Enabled only if minimum players met
-                bool canStart = connectedCount >= minNeeded;
+                bool canStart = inLobby && connectedCount >= minNeeded && connectedCount <= maxAllowed;
                 startMatchButton.interactable = canStart;
 
-                if (!canStart && isHost && statusMessageText != null)
+                if (isHost && statusMessageText != null)
                 {
-                    statusMessageText.text = $"Waiting for players... ({connectedCount}/{minNeeded})";
-                }
-                else if (canStart && isHost && statusMessageText != null)
-                {
-                    statusMessageText.text = "Ready to start match!";
+                    statusMessageText.text = !inLobby ? "Starting match..." : canStart
+                        ? "Ready to start match!"
+                        : $"Need {minNeeded}–{maxAllowed} players ({connectedCount} connected).";
                 }
             }
 
@@ -120,12 +111,8 @@ namespace LuckyNumber.UI
 
             if (playerListContainer == null || playerCardPrefab == null) return;
 
-            foreach (var client in NetworkManager.Singleton.ConnectedClients.Values)
+            foreach (var netPlayer in LuckyNetworkPlayer.SpawnedPlayers.Values)
             {
-                if (client.PlayerObject == null) continue;
-                var netPlayer = client.PlayerObject.GetComponent<LuckyNetworkPlayer>();
-                if (netPlayer == null) continue;
-
                 var cardObj = Instantiate(playerCardPrefab, playerListContainer);
                 activePlayerCards.Add(cardObj);
 
@@ -133,7 +120,7 @@ namespace LuckyNumber.UI
                 var images = cardObj.GetComponentsInChildren<Image>();
 
                 string pName = netPlayer.PlayerName.Value.ToString();
-                bool isCardHost = client.ClientId == NetworkManager.ServerClientId;
+                bool isCardHost = netPlayer.OwnerClientId == NetworkManager.ServerClientId;
                 bool isReady = netPlayer.IsReady.Value;
 
                 // Set player name text
@@ -162,27 +149,19 @@ namespace LuckyNumber.UI
         private void OnToggleReady()
         {
             AudioManager.Instance?.PlayClick();
-            isLocalReady = !isLocalReady;
-
-            if (readyButtonText != null)
-            {
-                readyButtonText.text = isLocalReady ? "UNREADY" : "READY";
-            }
-
-            var localPlayer = NetworkManager.Singleton?.LocalClient?.PlayerObject?.GetComponent<LuckyNetworkPlayer>();
+            var localPlayer = LuckyNetworkPlayer.LocalPlayer;
             if (localPlayer != null)
             {
-                localPlayer.SetReadyServerRpc(isLocalReady);
+                localPlayer.SetReadyServerRpc(!localPlayer.IsReady.Value);
             }
         }
 
         private void OnStartMatchClicked()
         {
             AudioManager.Instance?.PlayClick();
-            if (NetworkGameManager.Instance != null)
-            {
-                NetworkGameManager.Instance.RequestStartMatchServerRpc();
-            }
+            var game = NetworkGameManager.Instance;
+            if (game != null && game.IsSpawned)
+                game.RequestStartMatchServerRpc(game.ActionContext.Value);
         }
 
         private void OnLeaveRoom()
@@ -191,10 +170,6 @@ namespace LuckyNumber.UI
             NetworkLobbyManager.Instance?.LeaveRoom();
         }
 
-        private void HandleClientListChanged(ulong clientId)
-        {
-            UpdateLobbyView();
-        }
     }
 }
 

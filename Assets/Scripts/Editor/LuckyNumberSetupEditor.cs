@@ -68,24 +68,7 @@ namespace LuckyNumber.Editor
             if (settings == null)
             {
                 settings = ScriptableObject.CreateInstance<GameSettings>();
-                settings.minPlayers = 3;
-                settings.maxPlayers = 8;
-                settings.startingMoves = 15;
-                settings.minLuckyTarget = 25;
-                settings.maxLuckyTarget = 55;
-                settings.skipsPerPlayer = 1;
-                settings.turnDurationSeconds = 30f;
-                settings.discussionDurationSeconds = 45f;
-                settings.votingDurationSeconds = 25f;
-                settings.roleRevealDurationSeconds = 4f;
-                settings.eliminationDurationSeconds = 5f;
-                settings.forcedBlockUsesPerMatch = 1;
-                settings.luckyShiftUsesPerMatch = 1;
-                settings.cursedDiceUsesPerMatch = 1;
-                settings.cursedBiasStrength = 0.85f;
-
                 AssetDatabase.CreateAsset(settings, path);
-                EditorUtility.SetDirty(settings);
             }
             return settings;
         }
@@ -294,8 +277,8 @@ namespace LuckyNumber.Editor
             var joinRelayBtn = CreateButton("JoinRelayBtn", onlineBox.transform, "JOIN ONLINE ROOM", new Vector2(0.5f, 0.35f), new Vector2(400, 60));
 
             CreateText("LocalSep", onlineBox.transform, "─── LOCALHOST / LAN MODE ───", 16, Color.gray, new Vector2(0.5f, 0.22f), new Vector2(400, 30));
-            var hostLocalBtn = CreateButton("HostLocalBtn", onlineBox.transform, "HOST LOCAL", new Vector2(0.3f, 0.1f), new Vector2(180, 45));
-            var joinLocalBtn = CreateButton("JoinLocalBtn", onlineBox.transform, "JOIN LOCAL", new Vector2(0.7f, 0.1f), new Vector2(180, 45));
+            var hostLocalBtn = CreateButton("HostLocalBtn", onlineBox.transform, "HOST LOCAL TEST", new Vector2(0.3f, 0.1f), new Vector2(180, 45));
+            var joinLocalBtn = CreateButton("JoinLocalBtn", onlineBox.transform, "JOIN LOCAL TEST", new Vector2(0.7f, 0.1f), new Vector2(180, 45));
 
             // Bottom controls
             var howToPlayBtn = CreateButton("HowToPlayBtn", panel.transform, "HOW TO PLAY", new Vector2(0.38f, 0.08f), new Vector2(200, 50));
@@ -672,8 +655,9 @@ namespace LuckyNumber.Editor
 
         private static void UpdateBuildSettings()
         {
+            const string masterScenePath = "Assets/Scenes/LuckyNumberMaster.unity";
             string[] allPaths = {
-                "Assets/Scenes/LuckyNumberMaster.unity",
+                masterScenePath,
                 "Assets/Scenes/MainMenu.unity",
                 "Assets/Scenes/Lobby.unity",
                 "Assets/Scenes/Gameplay.unity",
@@ -686,7 +670,7 @@ namespace LuckyNumber.Editor
             {
                 if (File.Exists(p))
                 {
-                    scenesList.Add(new EditorBuildSettingsScene(p, true));
+                    scenesList.Add(new EditorBuildSettingsScene(p, p == masterScenePath));
                 }
             }
             EditorBuildSettings.scenes = scenesList.ToArray();

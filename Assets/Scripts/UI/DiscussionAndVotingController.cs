@@ -32,90 +32,87 @@ namespace LuckyNumber.UI
         [SerializeField] private Sprite normalBadgeSprite;
 
         private readonly List<GameObject> spawnedVoteCards = new List<GameObject>();
-        private bool hasVotedThisRound = false;
+        private NetworkGameManager game;
+        private bool votePending;
+        private bool voteAccepted;
+        private bool playedRevealSound;
+        private int candidateCount;
 
         private void OnEnable()
         {
             if (skipVoteButton != null) skipVoteButton.onClick.AddListener(OnSkipVote);
 
-            if (NetworkGameManager.Instance != null)
-            {
-                NetworkGameManager.Instance.OnPhaseChanged += HandlePhaseChanged;
-            }
-
-            hasVotedThisRound = false;
-            if (voteSubmittedStatusText != null) voteSubmittedStatusText.gameObject.SetActive(false);
-            if (eliminationModalPanel != null) eliminationModalPanel.SetActive(false);
-
-            RefreshUI();
+            Update();
         }
 
         private void OnDisable()
         {
             if (skipVoteButton != null) skipVoteButton.onClick.RemoveListener(OnSkipVote);
 
-            if (NetworkGameManager.Instance != null)
-            {
-                NetworkGameManager.Instance.OnPhaseChanged -= HandlePhaseChanged;
-            }
+            BindGame(null);
         }
 
         private void Update()
         {
-            if (NetworkGameManager.Instance == null) return;
+            var manager = NetworkGameManager.Instance;
+            BindGame(manager != null && manager.IsSpawned ? manager : null);
+            if (game == null) return;
 
-            float remaining = Mathf.Max(0f, NetworkGameManager.Instance.PhaseTimer.Value);
+            float remaining = Mathf.Max(0f, game.PhaseTimer.Value);
             string timerStr = $"{Mathf.CeilToInt(remaining)}s";
 
             if (discussionTimerText != null) discussionTimerText.text = timerStr;
             if (votingTimerText != null) votingTimerText.text = timerStr;
+            if (game.CurrentGamePhase.Value == GamePhase.Voting)
+            {
+                var candidates = game.GetAllLivingPlayers();
+                if (candidates.Count != candidateCount) BuildVotingCards(candidates);
+                SetVoteButtons(CanVote());
+            }
+            else if (game.CurrentGamePhase.Value == GamePhase.Elimination)
+                ShowEliminationReveal();
+        }
+
+        private void BindGame(NetworkGameManager next)
+        {
+            if (ReferenceEquals(game, next)) return;
+            if (!ReferenceEquals(game, null))
+            {
+                game.OnPhaseChanged -= HandlePhaseChanged;
+                game.OnActionFeedback -= HandleActionFeedback;
+            }
+            game = next;
+            if (game != null)
+            {
+                game.OnPhaseChanged += HandlePhaseChanged;
+                game.OnActionFeedback += HandleActionFeedback;
+            }
+            HandlePhaseChanged(game != null ? game.CurrentGamePhase.Value : GamePhase.Lobby);
         }
 
         private void HandlePhaseChanged(GamePhase phase)
         {
-            if (phase == GamePhase.Discussion)
-            {
-                hasVotedThisRound = false;
-                if (eliminationModalPanel != null) eliminationModalPanel.SetActive(false);
-                if (voteSubmittedStatusText != null) voteSubmittedStatusText.gameObject.SetActive(false);
-            }
-            else if (phase == GamePhase.Voting)
-            {
-                BuildVotingCards();
-            }
-            else if (phase == GamePhase.Elimination)
-            {
-                ShowEliminationReveal();
-            }
-        }
-
-        private void RefreshUI()
-        {
-            if (NetworkGameManager.Instance == null) return;
-
-            var phase = NetworkGameManager.Instance.CurrentGamePhase.Value;
+            votePending = false;
+            voteAccepted = false;
+            playedRevealSound = false;
+            ShowVoteStatus(null);
             if (phase == GamePhase.Voting)
-            {
-                BuildVotingCards();
-            }
+                BuildVotingCards(game.GetAllLivingPlayers());
             else if (phase == GamePhase.Elimination)
-            {
                 ShowEliminationReveal();
-            }
         }
 
-        private void BuildVotingCards()
+        private void BuildVotingCards(List<LuckyNetworkPlayer> livingPlayers)
         {
             foreach (var card in spawnedVoteCards)
             {
                 if (card != null) Destroy(card);
             }
             spawnedVoteCards.Clear();
+            candidateCount = livingPlayers.Count;
 
             if (votingCandidatesContainer == null || voteCandidateCardPrefab == null) return;
-
-            var livingPlayers = NetworkGameManager.Instance.GetAllLivingPlayers();
-            ulong localClientId = NetworkManager.Singleton.LocalClientId;
+            var localPlayer = LuckyNetworkPlayer.LocalPlayer;
 
             foreach (var p in livingPlayers)
             {
@@ -128,7 +125,7 @@ namespace LuckyNumber.UI
                 var btn = cardObj.GetComponentInChildren<Button>();
 
                 string pName = p.PlayerName.Value.ToString();
-                if (p.OwnerClientId == localClientId) pName += " (You)";
+                if (p == localPlayer) pName += " (You)";
 
                 if (texts.Length > 0) texts[0].text = pName;
 
@@ -141,67 +138,71 @@ namespace LuckyNumber.UI
                 ulong targetId = p.OwnerClientId;
                 if (btn != null)
                 {
-                    btn.interactable = !hasVotedThisRound;
+                    btn.interactable = CanVote();
                     btn.onClick.AddListener(() => OnCastVote(targetId));
                 }
             }
 
-            if (skipVoteButton != null) skipVoteButton.interactable = !hasVotedThisRound;
+            if (skipVoteButton != null) skipVoteButton.interactable = CanVote();
         }
 
-        private void OnCastVote(ulong suspectClientId)
+        private bool CanVote()
         {
-            if (hasVotedThisRound) return;
-            hasVotedThisRound = true;
-
-            AudioManager.Instance?.PlayClick();
-            NetworkGameManager.Instance?.SubmitVoteServerRpc(suspectClientId);
-
-            if (voteSubmittedStatusText != null)
-            {
-                voteSubmittedStatusText.gameObject.SetActive(true);
-                voteSubmittedStatusText.text = "✓ Vote submitted! Waiting for others...";
-            }
-
-            DisableAllVoteButtons();
+            var local = LuckyNetworkPlayer.LocalPlayer;
+            return game != null && game.CurrentGamePhase.Value == GamePhase.Voting &&
+                local != null && local.IsAlive.Value && !local.HasVoted.Value && !votePending && !voteAccepted;
         }
 
-        private void OnSkipVote()
+        private void OnCastVote(ulong suspectClientId) => SendBallot(suspectClientId);
+        private void OnSkipVote() => SendBallot(null);
+
+        private void SendBallot(ulong? suspect)
         {
-            if (hasVotedThisRound) return;
-            hasVotedThisRound = true;
-
-            AudioManager.Instance?.PlayClick();
-            NetworkGameManager.Instance?.SkipVoteServerRpc();
-
-            if (voteSubmittedStatusText != null)
-            {
-                voteSubmittedStatusText.gameObject.SetActive(true);
-                voteSubmittedStatusText.text = "✓ Abstain vote submitted! Waiting for others...";
-            }
-
-            DisableAllVoteButtons();
+            if (!CanVote()) return;
+            votePending = true;
+            SetVoteButtons(false);
+            ShowVoteStatus("Sending ballot...");
+            var stamp = game.ActionContext.Value;
+            if (suspect.HasValue)
+                game.SubmitVoteServerRpc(suspect.Value, stamp);
+            else
+                game.SkipVoteServerRpc(stamp);
         }
 
-        private void DisableAllVoteButtons()
+        private void HandleActionFeedback(ActionStamp stamp, MatchAction action, bool accepted, string message)
         {
-            if (skipVoteButton != null) skipVoteButton.interactable = false;
+            if (action != MatchAction.Vote || game.CurrentGamePhase.Value != GamePhase.Voting ||
+                !stamp.Equals(game.ActionContext.Value)) return;
+            votePending = false;
+            voteAccepted = accepted;
+            if (accepted) AudioManager.Instance?.PlayClick();
+            ShowVoteStatus(message);
+        }
+
+        private void ShowVoteStatus(string message)
+        {
+            if (voteSubmittedStatusText == null) return;
+            voteSubmittedStatusText.text = message;
+            voteSubmittedStatusText.gameObject.SetActive(!string.IsNullOrEmpty(message));
+        }
+
+        private void SetVoteButtons(bool enabled)
+        {
+            if (skipVoteButton != null) skipVoteButton.interactable = enabled;
             foreach (var card in spawnedVoteCards)
             {
                 if (card != null)
                 {
                     var btn = card.GetComponentInChildren<Button>();
-                    if (btn != null) btn.interactable = false;
+                    if (btn != null) btn.interactable = enabled;
                 }
             }
         }
 
         private void ShowEliminationReveal()
         {
-            if (eliminationModalPanel != null) eliminationModalPanel.SetActive(true);
-
-            string elimName = NetworkGameManager.Instance.LastEliminatedPlayerName.Value.ToString();
-            PlayerRole elimRole = NetworkGameManager.Instance.LastEliminatedRole.Value;
+            string elimName = game.LastEliminatedPlayerName.Value.ToString();
+            PlayerRole elimRole = game.LastEliminatedRole.Value;
 
             if (string.IsNullOrEmpty(elimName))
             {
@@ -211,7 +212,11 @@ namespace LuckyNumber.UI
             }
             else
             {
-                AudioManager.Instance?.PlayAlarm();
+                if (!playedRevealSound)
+                {
+                    AudioManager.Instance?.PlayAlarm();
+                    playedRevealSound = true;
+                }
                 if (eliminatedPlayerNameText != null) eliminatedPlayerNameText.text = $"{elimName} WAS ELIMINATED!";
                 if (revealedRoleText != null)
                 {

@@ -18,12 +18,14 @@ namespace LuckyNumber.UI
         [Header("Controls")]
         [SerializeField] private Button playAgainButton;
         [SerializeField] private Button returnToMenuButton;
+        private Team displayedWinner;
 
         private void OnEnable()
         {
             if (playAgainButton != null) playAgainButton.onClick.AddListener(OnPlayAgain);
             if (returnToMenuButton != null) returnToMenuButton.onClick.AddListener(OnReturnToMenu);
 
+            displayedWinner = Team.None;
             DisplayResults();
         }
 
@@ -48,14 +50,16 @@ namespace LuckyNumber.UI
                 {
                     winnerTitleText.text = "🎉 TEAM VICTORY! 🎉";
                     winnerTitleText.color = Color.green;
-                    AudioManager.Instance?.PlayVictory();
+                    if (displayedWinner != winner) AudioManager.Instance?.PlayVictory();
                 }
-                else
+                else if (winner == Team.ImposterTeam)
                 {
                     winnerTitleText.text = "😈 IMPOSTERS WIN! 😈";
                     winnerTitleText.color = Color.red;
-                    AudioManager.Instance?.PlayAlarm();
+                    if (displayedWinner != winner) AudioManager.Instance?.PlayAlarm();
                 }
+                else winnerTitleText.text = string.Empty;
+                displayedWinner = winner;
             }
 
             if (winReasonText != null)
@@ -77,17 +81,23 @@ namespace LuckyNumber.UI
 
             if (playAgainButton != null)
             {
-                // Only host can trigger Play Again
-                playAgainButton.gameObject.SetActive(NetworkManager.Singleton != null && NetworkManager.Singleton.IsHost);
+                bool isHost = NetworkManager.Singleton != null && NetworkManager.Singleton.IsHost;
+                playAgainButton.gameObject.SetActive(isHost);
+                var settings = NetworkGameManager.Instance.Settings;
+                int count = LuckyNetworkPlayer.SpawnedPlayers.Count;
+                playAgainButton.interactable = isHost && count >= settings.minPlayers && count <= settings.maxPlayers;
             }
         }
+
+        private void Update() => DisplayResults();
 
         private void OnPlayAgain()
         {
             AudioManager.Instance?.PlayClick();
-            if (NetworkGameManager.Instance != null && NetworkManager.Singleton != null && NetworkManager.Singleton.IsHost)
+            var game = NetworkGameManager.Instance;
+            if (game != null && game.IsSpawned && NetworkManager.Singleton != null && NetworkManager.Singleton.IsHost)
             {
-                NetworkGameManager.Instance.StartMatch();
+                game.RequestRematchServerRpc(game.ActionContext.Value);
             }
         }
 
@@ -95,7 +105,6 @@ namespace LuckyNumber.UI
         {
             AudioManager.Instance?.PlayClick();
             NetworkLobbyManager.Instance?.LeaveRoom();
-            LuckyUIManager.Instance?.ShowMainMenu();
         }
     }
 }

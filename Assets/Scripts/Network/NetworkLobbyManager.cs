@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using LuckyNumber.Core;
 using Unity.Netcode;
 using Unity.Netcode.Transports.UTP;
 using Unity.Networking.Transport.Relay;
@@ -9,15 +10,19 @@ using Unity.Services.Core;
 using Unity.Services.Lobbies;
 using Unity.Services.Lobbies.Models;
 using Unity.Services.Relay;
-using Unity.Services.Relay.Models;
 using UnityEngine;
 
 namespace LuckyNumber.Network
 {
-    /// <summary>
-    /// Manages Unity Gaming Services (Authentication, Lobby, Relay)
-    /// and provides direct Localhost fallback for testing.
-    /// </summary>
+    public enum RoomConnectionState
+    {
+        Idle,
+        Connecting,
+        InRoom,
+        Leaving,
+        Error
+    }
+
     public class NetworkLobbyManager : MonoBehaviour
     {
         public static NetworkLobbyManager Instance { get; private set; }
@@ -26,21 +31,36 @@ namespace LuckyNumber.Network
         [SerializeField] private string lobbyName = "LuckyNumberRoom";
         [SerializeField] private ushort defaultLocalPort = 7777;
 
+        private const string Loopback = "127.0.0.1";
+        private const float ConnectionTimeout = 12f;
+        private const float HeartbeatInterval = 15f;
+
+        private NetworkManager network;
+        private TaskCompletionSource<bool> connectionResult;
+        private Task<bool> servicesInitialization;
+        private bool settingUpRelay;
+        private bool ownsCloudLobby;
+        private bool cloudMaintenanceRunning;
+        private bool cloudLobbyLocked;
+        private float connectionDeadline;
+        private float nextHeartbeat;
+        private float nextLockAttempt;
+
+        public RoomConnectionState State { get; private set; }
+        public string LastStatus { get; private set; } = "Ready.";
         public string CurrentRoomCode { get; private set; } = string.Empty;
         public string CurrentLobbyId { get; private set; } = string.Empty;
-        public bool IsUsingRelay { get; private set; } = true;
-        public bool IsServicesInitialized { get; private set; } = false;
+        public bool IsUsingRelay { get; private set; }
+        public bool IsServicesInitialized { get; private set; }
 
+        public event Action<RoomConnectionState> OnStateChanged;
         public event Action<string> OnStatusChanged;
         public event Action<string> OnRoomJoined;
         public event Action OnLeftRoom;
 
-        private float heartbeatTimer = 0f;
-        private const float HeartbeatInterval = 15f;
-
         private void Awake()
         {
-            if (Instance != null && Instance != null)
+            if (Instance != null && Instance != this)
             {
                 Destroy(gameObject);
                 return;
@@ -49,241 +69,343 @@ namespace LuckyNumber.Network
             DontDestroyOnLoad(gameObject);
         }
 
-        private async void Start()
-        {
-            await InitializeServicesAsync();
-        }
-
         private void Update()
         {
-            HandleLobbyHeartbeat();
+            if (State == RoomConnectionState.Connecting && connectionDeadline > 0f &&
+                Time.unscaledTime >= connectionDeadline)
+            {
+                BeginDisconnect("Connection timed out. Check that the host is running and try again.", true);
+            }
+
+            if (State != RoomConnectionState.InRoom || !ownsCloudLobby || cloudMaintenanceRunning) return;
+            var game = NetworkGameManager.Instance;
+            bool lockDue = !cloudLobbyLocked && Time.unscaledTime >= nextLockAttempt &&
+                game != null && game.IsSpawned && game.CurrentGamePhase.Value != GamePhase.Lobby;
+            if (lockDue || Time.unscaledTime >= nextHeartbeat)
+                MaintainCloudLobbyAsync(lockDue);
         }
 
-        public async Task<bool> InitializeServicesAsync()
+        public Task<bool> InitializeServicesAsync()
         {
-            if (IsServicesInitialized) return true;
+            if (IsServicesInitialized) return Task.FromResult(true);
+            if (servicesInitialization == null || servicesInitialization.IsCompleted)
+                servicesInitialization = InitializeServicesCoreAsync();
+            return servicesInitialization;
+        }
 
+        private async Task<bool> InitializeServicesCoreAsync()
+        {
             try
             {
-                OnStatusChanged?.Invoke("Initializing Unity Services...");
-                var initOptions = new InitializationOptions();
-                // Use a unique profile per local instance to allow multiple clients on the same machine
-                string profile = "Player_" + System.Guid.NewGuid().ToString().Substring(0, 8);
-                initOptions.SetProfile(profile);
-
-                await UnityServices.InitializeAsync(initOptions);
-
+                if (UnityServices.State != ServicesInitializationState.Initialized)
+                {
+                    var options = new InitializationOptions();
+                    options.SetProfile($"Player_{Guid.NewGuid().ToString("N").Substring(0, 8)}");
+                    await UnityServices.InitializeAsync(options);
+                }
                 if (!AuthenticationService.Instance.IsSignedIn)
-                {
-                    OnStatusChanged?.Invoke("Signing in anonymously...");
                     await AuthenticationService.Instance.SignInAnonymouslyAsync();
-                }
-
                 IsServicesInitialized = true;
-                OnStatusChanged?.Invoke($"Ready. Signed in as {AuthenticationService.Instance.PlayerId.Substring(0, 6)}...");
-                Debug.Log($"[NetworkLobbyManager] Services initialized with profile {profile}");
                 return true;
             }
             catch (Exception ex)
             {
-                Debug.LogWarning($"[NetworkLobbyManager] Services Init warning (Localhost mode still available): {ex.Message}");
-                OnStatusChanged?.Invoke("Services offline. Localhost mode available.");
+                Debug.LogWarning($"[NetworkLobbyManager] Services initialization failed: {ex.Message}");
                 return false;
             }
         }
 
-        /// <summary>
-        /// Creates a room using Unity Relay and Unity Lobby (Internet Multiplayer).
-        /// </summary>
-        public async Task<bool> CreateRelayRoomAsync(int maxPlayers)
+        public Task<bool> CreateRelayRoomAsync(int maxPlayers) => ConnectRelayAsync(true, string.Empty, maxPlayers);
+        public Task<bool> JoinRelayRoomAsync(string roomCode) => ConnectRelayAsync(false, roomCode, 0);
+
+        private async Task<bool> ConnectRelayAsync(bool host, string roomCode, int maxPlayers)
         {
+            if (!host && string.IsNullOrWhiteSpace(roomCode))
+            {
+                if (CanConnect()) SetStatus("Please enter a room code.");
+                return false;
+            }
+            if (!TryBeginConnection(true)) return false;
+            var result = connectionResult;
+
+            settingUpRelay = true;
             try
             {
-                if (!IsServicesInitialized)
-                {
-                    bool init = await InitializeServicesAsync();
-                    if (!init) throw new Exception("UGS initialization failed. Check internet/dashboard.");
-                }
+                SetStatus("Connecting to Unity Services...");
+                if (!await InitializeServicesAsync())
+                    throw new InvalidOperationException("Unity Services are unavailable.");
+                if (State != RoomConnectionState.Connecting) return false;
 
-                OnStatusChanged?.Invoke("Allocating Relay server...");
-                Allocation allocation = await RelayService.Instance.CreateAllocationAsync(maxPlayers - 1);
-                string relayJoinCode = await RelayService.Instance.GetJoinCodeAsync(allocation.AllocationId);
-
-                OnStatusChanged?.Invoke("Creating public Lobby...");
-                var createOptions = new CreateLobbyOptions
+                var transport = network.GetComponent<UnityTransport>();
+                if (host)
                 {
-                    IsPrivate = false,
-                    Data = new Dictionary<string, DataObject>
+                    SetStatus("Allocating an online room...");
+                    var allocation = await RelayService.Instance.CreateAllocationAsync(maxPlayers - 1);
+                    if (State != RoomConnectionState.Connecting) return false;
+                    string relayCode = await RelayService.Instance.GetJoinCodeAsync(allocation.AllocationId);
+                    if (State != RoomConnectionState.Connecting) return false;
+
+                    var options = new CreateLobbyOptions
                     {
-                        { "RelayCode", new DataObject(DataObject.VisibilityOptions.Member, relayJoinCode) }
-                    }
-                };
-
-                Lobby lobby = await LobbyService.Instance.CreateLobbyAsync(lobbyName, maxPlayers, createOptions);
-                CurrentLobbyId = lobby.Id;
-                CurrentRoomCode = lobby.LobbyCode;
-                IsUsingRelay = true;
-
-                // Configure Netcode Transport with Relay data
-                var transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
-                var relayServerData = new RelayServerData(allocation, "dtls");
-                transport.SetRelayServerData(relayServerData);
-
-                NetworkManager.Singleton.StartHost();
-
-                OnStatusChanged?.Invoke($"Room Created! Code: {CurrentRoomCode}");
-                OnRoomJoined?.Invoke(CurrentRoomCode);
-                return true;
+                        IsPrivate = false,
+                        Data = new Dictionary<string, DataObject>
+                        {
+                            { "RelayCode", new DataObject(DataObject.VisibilityOptions.Member, relayCode) }
+                        }
+                    };
+                    var lobby = await LobbyService.Instance.CreateLobbyAsync(lobbyName, maxPlayers, options);
+                    RememberLobby(lobby, true);
+                    if (State != RoomConnectionState.Connecting) return false;
+                    transport.SetRelayServerData(new RelayServerData(allocation, "dtls"));
+                }
+                else
+                {
+                    SetStatus("Joining the online room...");
+                    var lobby = await LobbyService.Instance.JoinLobbyByCodeAsync(roomCode.Trim());
+                    RememberLobby(lobby, false);
+                    if (State != RoomConnectionState.Connecting) return false;
+                    if (lobby.Data == null || !lobby.Data.TryGetValue("RelayCode", out var relayCode))
+                        throw new InvalidOperationException("The room has no Relay connection code.");
+                    var allocation = await RelayService.Instance.JoinAllocationAsync(relayCode.Value);
+                    if (State != RoomConnectionState.Connecting) return false;
+                    transport.SetRelayServerData(new RelayServerData(allocation, "dtls"));
+                }
+                StartTransport(host);
             }
             catch (Exception ex)
             {
-                Debug.LogError($"[NetworkLobbyManager] Create Relay Room error: {ex.Message}");
-                OnStatusChanged?.Invoke($"Failed to create room: {ex.Message}");
-                return false;
+                BeginDisconnect($"Unable to {(host ? "create" : "join")} the room. {ex.Message}", true);
             }
+            finally
+            {
+                settingUpRelay = false;
+            }
+            return await result.Task;
         }
 
-        /// <summary>
-        /// Joins an existing room using the 6-character Lobby code (Internet Multiplayer).
-        /// </summary>
-        public async Task<bool> JoinRelayRoomAsync(string roomCode)
+        private void RememberLobby(Lobby lobby, bool owned)
         {
+            CurrentLobbyId = lobby.Id;
+            CurrentRoomCode = lobby.LobbyCode;
+            ownsCloudLobby = owned;
+        }
+
+        public void StartLocalHost(ushort port = 0) => ConnectLocal(true, port);
+
+        public void JoinLocalClient(string ipAddress = Loopback, ushort port = 0)
+        {
+            if (!string.IsNullOrWhiteSpace(ipAddress) && ipAddress.Trim() != Loopback)
+            {
+                if (CanConnect()) SetStatus("Local testing connects to a host on this machine.");
+                return;
+            }
+            ConnectLocal(false, port);
+        }
+
+        private void ConnectLocal(bool host, ushort port)
+        {
+            if (!TryBeginConnection(false)) return;
+            ushort targetPort = port > 0 ? port : defaultLocalPort;
+            CurrentRoomCode = $"LOCAL-{targetPort}";
             try
             {
-                if (string.IsNullOrWhiteSpace(roomCode))
-                {
-                    OnStatusChanged?.Invoke("Please enter a room code.");
-                    return false;
-                }
-
-                if (!IsServicesInitialized)
-                {
-                    bool init = await InitializeServicesAsync();
-                    if (!init) throw new Exception("UGS initialization failed.");
-                }
-
-                OnStatusChanged?.Invoke($"Finding room {roomCode.Trim()}...");
-                Lobby lobby = await LobbyService.Instance.JoinLobbyByCodeAsync(roomCode.Trim());
-                CurrentLobbyId = lobby.Id;
-                CurrentRoomCode = lobby.LobbyCode;
-                IsUsingRelay = true;
-
-                string relayJoinCode = lobby.Data["RelayCode"].Value;
-                OnStatusChanged?.Invoke("Joining Relay allocation...");
-                JoinAllocation joinAllocation = await RelayService.Instance.JoinAllocationAsync(relayJoinCode);
-
-                var transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
-                var relayServerData = new RelayServerData(joinAllocation, "dtls");
-                transport.SetRelayServerData(relayServerData);
-
-                NetworkManager.Singleton.StartClient();
-
-                OnStatusChanged?.Invoke($"Joined room {CurrentRoomCode}!");
-                OnRoomJoined?.Invoke(CurrentRoomCode);
-                return true;
+                network.GetComponent<UnityTransport>().SetConnectionData(Loopback, targetPort, Loopback);
+                StartTransport(host);
             }
             catch (Exception ex)
             {
-                Debug.LogError($"[NetworkLobbyManager] Join Relay Room error: {ex.Message}");
-                OnStatusChanged?.Invoke($"Failed to join room: {ex.Message}");
-                return false;
+                BeginDisconnect($"Unable to start localhost networking. {ex.Message}", true);
             }
         }
 
-        /// <summary>
-        /// Starts a local host directly without cloud dependencies (for local/LAN testing).
-        /// </summary>
-        public void StartLocalHost(ushort port = 0)
+        private bool CanConnect() => State == RoomConnectionState.Idle || State == RoomConnectionState.Error;
+
+        private bool TryBeginConnection(bool relay)
         {
-            ushort targetPort = port > 0 ? port : defaultLocalPort;
-            var transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
-            transport.SetConnectionData("127.0.0.1", targetPort);
+            if (!CanConnect()) return false;
+            var manager = NetworkManager.Singleton;
+            if (manager == null || manager.GetComponent<UnityTransport>() == null ||
+                manager.IsListening || manager.ShutdownInProgress || manager.IsClient || manager.IsServer)
+            {
+                SetState(RoomConnectionState.Error);
+                SetStatus("Networking is unavailable or still shutting down.");
+                return false;
+            }
 
-            IsUsingRelay = false;
-            CurrentRoomCode = "LOCAL-" + targetPort;
-            NetworkManager.Singleton.StartHost();
+            network = manager;
+            IsUsingRelay = relay;
+            connectionResult = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            network.NetworkConfig.ConnectionApproval = true;
+            network.ConnectionApprovalCallback = ApproveConnection;
+            network.OnClientConnectedCallback += HandleClientConnected;
+            network.OnClientDisconnectCallback += HandleClientDisconnected;
+            network.OnClientStopped += HandleClientStopped;
+            SetState(RoomConnectionState.Connecting);
+            return true;
+        }
 
-            OnStatusChanged?.Invoke($"Local Host started on 127.0.0.1:{targetPort}");
+        private void StartTransport(bool host)
+        {
+            connectionDeadline = Time.unscaledTime + ConnectionTimeout;
+            SetStatus(host ? "Starting host..." : "Connecting to host...");
+            bool started = host ? network.StartHost() : network.StartClient();
+            if (!started)
+                BeginDisconnect(host ? "Could not start the host. The port may already be in use." : "Could not start the client.", true);
+        }
+
+        private void ApproveConnection(NetworkManager.ConnectionApprovalRequest request, NetworkManager.ConnectionApprovalResponse response)
+        {
+            var game = NetworkGameManager.Instance;
+            int maxPlayers = game != null ? game.Settings.maxPlayers : 8;
+            bool localHost = request.ClientNetworkId == NetworkManager.ServerClientId;
+            bool lobbyOpen = State == RoomConnectionState.InRoom && game != null && game.IsSpawned &&
+                game.CurrentGamePhase.Value == GamePhase.Lobby;
+            bool roomFull = network.ConnectedClientsIds.Count >= maxPlayers;
+            response.Approved = localHost || (lobbyOpen && !roomFull);
+            response.CreatePlayerObject = response.Approved;
+            if (!response.Approved)
+                response.Reason = roomFull ? "The room is full." : "The match has already started.";
+        }
+
+        private void HandleClientConnected(ulong clientId)
+        {
+            if (clientId != network.LocalClientId)
+            {
+                var game = NetworkGameManager.Instance;
+                if (network.IsHost && game != null && game.IsSpawned &&
+                    game.CurrentGamePhase.Value != GamePhase.Lobby && !game.IsInCurrentMatch(clientId))
+                {
+                    network.DisconnectClient(clientId, "The match has already started.");
+                }
+                return;
+            }
+            if (State != RoomConnectionState.Connecting) return;
+
+            connectionDeadline = 0f;
+            nextHeartbeat = Time.unscaledTime + HeartbeatInterval;
+            SetState(RoomConnectionState.InRoom);
+            SetStatus(IsUsingRelay ? $"Connected. Room code: {CurrentRoomCode}" : "Connected on localhost.");
+            connectionResult.TrySetResult(true);
             OnRoomJoined?.Invoke(CurrentRoomCode);
         }
 
-        /// <summary>
-        /// Joins a local host directly without cloud dependencies (for local/LAN testing).
-        /// </summary>
-        public void JoinLocalClient(string ipAddress = "127.0.0.1", ushort port = 0)
+        private void HandleClientDisconnected(ulong clientId)
         {
-            ushort targetPort = port > 0 ? port : defaultLocalPort;
-            string targetIp = string.IsNullOrWhiteSpace(ipAddress) ? "127.0.0.1" : ipAddress.Trim();
-
-            var transport = NetworkManager.Singleton.GetComponent<UnityTransport>();
-            transport.SetConnectionData(targetIp, targetPort);
-
-            IsUsingRelay = false;
-            CurrentRoomCode = "LOCAL-" + targetPort;
-            NetworkManager.Singleton.StartClient();
-
-            OnStatusChanged?.Invoke($"Connecting to {targetIp}:{targetPort}...");
-            OnRoomJoined?.Invoke(CurrentRoomCode);
+            if (clientId == network.LocalClientId) ReportConnectionLost();
         }
 
-        /// <summary>
-        /// Leaves current match and cleanly shuts down networking.
-        /// </summary>
-        public async void LeaveRoom()
+        private void HandleClientStopped(bool wasHost) => ReportConnectionLost();
+
+        private void ReportConnectionLost()
         {
-            try
+            if (State != RoomConnectionState.Connecting && State != RoomConnectionState.InRoom) return;
+            string reason = network.DisconnectReason;
+            if (string.IsNullOrEmpty(reason))
+                reason = State == RoomConnectionState.InRoom ? "The connection to the host was lost." : "Could not connect to the host.";
+            BeginDisconnect(reason, true);
+        }
+
+        public void LeaveRoom() => BeginDisconnect("Disconnected.", false);
+
+        private async void BeginDisconnect(string finalStatus, bool error)
+        {
+            if (CanConnect() || State == RoomConnectionState.Leaving) return;
+            SetState(RoomConnectionState.Leaving);
+            SetStatus("Disconnecting...");
+            connectionDeadline = 0f;
+            var stoppingNetwork = network;
+            if (stoppingNetwork != null && stoppingNetwork.IsListening && !stoppingNetwork.ShutdownInProgress)
+                stoppingNetwork.Shutdown(error);
+
+            // A stop callback can run before NGO has cleared its roles or disposed its transport.
+            do
             {
-                if (IsUsingRelay && !string.IsNullOrEmpty(CurrentLobbyId))
+                await Task.Yield();
+            }
+            while (settingUpRelay || cloudMaintenanceRunning ||
+                (stoppingNetwork != null && (stoppingNetwork.IsListening || stoppingNetwork.IsClient ||
+                    stoppingNetwork.IsServer || stoppingNetwork.ShutdownInProgress)));
+
+            if (!string.IsNullOrEmpty(CurrentLobbyId))
+            {
+                try
                 {
-                    if (NetworkManager.Singleton.IsHost)
-                    {
+                    if (ownsCloudLobby)
                         await LobbyService.Instance.DeleteLobbyAsync(CurrentLobbyId);
-                    }
                     else
-                    {
                         await LobbyService.Instance.RemovePlayerAsync(CurrentLobbyId, AuthenticationService.Instance.PlayerId);
-                    }
+                }
+                catch (Exception ex)
+                {
+                    Debug.LogWarning($"[NetworkLobbyManager] Lobby cleanup failed: {ex.Message}");
                 }
             }
-            catch (Exception ex)
-            {
-                Debug.LogWarning($"[NetworkLobbyManager] Leave lobby cleanup: {ex.Message}");
-            }
 
+            if (stoppingNetwork != null)
+            {
+                stoppingNetwork.OnClientConnectedCallback -= HandleClientConnected;
+                stoppingNetwork.OnClientDisconnectCallback -= HandleClientDisconnected;
+                stoppingNetwork.OnClientStopped -= HandleClientStopped;
+                stoppingNetwork.ConnectionApprovalCallback = null;
+            }
+            network = null;
+            LuckyNetworkPlayer.ClearSpawnedPlayers();
             CurrentLobbyId = string.Empty;
             CurrentRoomCode = string.Empty;
-
-            if (NetworkManager.Singleton != null && NetworkManager.Singleton.IsListening)
-            {
-                NetworkManager.Singleton.Shutdown();
-            }
-
-            OnStatusChanged?.Invoke("Disconnected.");
+            IsUsingRelay = false;
+            ownsCloudLobby = false;
+            cloudLobbyLocked = false;
+            nextLockAttempt = 0f;
+            connectionResult.TrySetResult(false);
+            connectionResult = null;
+            SetState(error ? RoomConnectionState.Error : RoomConnectionState.Idle);
+            SetStatus(finalStatus);
             OnLeftRoom?.Invoke();
         }
 
-        private async void HandleLobbyHeartbeat()
+        private async void MaintainCloudLobbyAsync(bool lockLobby)
         {
-            if (IsUsingRelay && NetworkManager.Singleton != null && NetworkManager.Singleton.IsHost && !string.IsNullOrEmpty(CurrentLobbyId))
+            cloudMaintenanceRunning = true;
+            try
             {
-                heartbeatTimer += Time.deltaTime;
-                if (heartbeatTimer >= HeartbeatInterval)
+                if (lockLobby)
                 {
-                    heartbeatTimer = 0f;
-                    try
-                    {
-                        await LobbyService.Instance.SendHeartbeatPingAsync(CurrentLobbyId);
-                    }
-                    catch (Exception ex)
-                    {
-                        Debug.LogWarning($"[NetworkLobbyManager] Heartbeat ping failed: {ex.Message}");
-                    }
+                    nextLockAttempt = Time.unscaledTime + HeartbeatInterval;
+                    await LobbyService.Instance.UpdateLobbyAsync(CurrentLobbyId, new UpdateLobbyOptions { IsLocked = true });
+                    cloudLobbyLocked = true;
+                }
+                else
+                {
+                    nextHeartbeat = Time.unscaledTime + HeartbeatInterval;
+                    await LobbyService.Instance.SendHeartbeatPingAsync(CurrentLobbyId);
                 }
             }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[NetworkLobbyManager] Lobby maintenance failed: {ex.Message}");
+            }
+            finally
+            {
+                cloudMaintenanceRunning = false;
+            }
+        }
+
+        private void SetState(RoomConnectionState state)
+        {
+            State = state;
+            OnStateChanged?.Invoke(state);
+        }
+
+        private void SetStatus(string status)
+        {
+            LastStatus = status;
+            OnStatusChanged?.Invoke(status);
         }
 
         private void OnDestroy()
         {
+            if (Instance != this) return;
+            Instance = null;
             LeaveRoom();
         }
     }

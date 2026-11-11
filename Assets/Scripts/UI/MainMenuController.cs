@@ -32,6 +32,11 @@ namespace LuckyNumber.UI
         [SerializeField] private TMP_Text statusText;
 
         private int selectedCharIndex = 0;
+        private NetworkLobbyManager lobby;
+
+        private void OnEnable() => BindLobby(NetworkLobbyManager.Instance);
+        private void OnDisable() => BindLobby(null);
+        private void Update() => BindLobby(NetworkLobbyManager.Instance);
 
         private void Start()
         {
@@ -64,18 +69,31 @@ namespace LuckyNumber.UI
 
             if (exitButton != null) exitButton.onClick.AddListener(OnExitGame);
 
-            if (NetworkLobbyManager.Instance != null)
-            {
-                NetworkLobbyManager.Instance.OnStatusChanged += UpdateStatus;
-            }
         }
 
-        private void OnDestroy()
+        private void BindLobby(NetworkLobbyManager next)
         {
-            if (NetworkLobbyManager.Instance != null)
+            if (ReferenceEquals(lobby, next)) return;
+            if (!ReferenceEquals(lobby, null))
             {
-                NetworkLobbyManager.Instance.OnStatusChanged -= UpdateStatus;
+                lobby.OnStatusChanged -= UpdateStatus;
+                lobby.OnStateChanged -= UpdateConnectButtons;
             }
+            lobby = next;
+            if (lobby == null) return;
+            lobby.OnStatusChanged += UpdateStatus;
+            lobby.OnStateChanged += UpdateConnectButtons;
+            UpdateStatus(lobby.LastStatus);
+            UpdateConnectButtons(lobby.State);
+        }
+
+        private void UpdateConnectButtons(RoomConnectionState state)
+        {
+            bool canConnect = state == RoomConnectionState.Idle || state == RoomConnectionState.Error;
+            if (createOnlineRoomButton != null) createOnlineRoomButton.interactable = canConnect;
+            if (joinOnlineRoomButton != null) joinOnlineRoomButton.interactable = canConnect;
+            if (createLocalRoomButton != null) createLocalRoomButton.interactable = canConnect;
+            if (joinLocalRoomButton != null) joinLocalRoomButton.interactable = canConnect;
         }
 
         private void SavePlayerProfile()
@@ -121,10 +139,10 @@ namespace LuckyNumber.UI
         {
             AudioManager.Instance?.PlayClick();
             SavePlayerProfile();
-            if (NetworkLobbyManager.Instance != null)
+            if (lobby != null)
             {
-                UpdateStatus("Creating online room via Relay...");
-                await NetworkLobbyManager.Instance.CreateRelayRoomAsync(8);
+                var game = NetworkGameManager.Instance;
+                await lobby.CreateRelayRoomAsync(game != null ? game.Settings.maxPlayers : 8);
             }
         }
 
@@ -139,10 +157,9 @@ namespace LuckyNumber.UI
                 return;
             }
 
-            if (NetworkLobbyManager.Instance != null)
+            if (lobby != null)
             {
-                UpdateStatus($"Joining room {code}...");
-                await NetworkLobbyManager.Instance.JoinRelayRoomAsync(code);
+                await lobby.JoinRelayRoomAsync(code);
             }
         }
 
@@ -150,15 +167,14 @@ namespace LuckyNumber.UI
         {
             AudioManager.Instance?.PlayClick();
             SavePlayerProfile();
-            NetworkLobbyManager.Instance?.StartLocalHost();
+            lobby?.StartLocalHost();
         }
 
         private void OnJoinLocalRoom()
         {
             AudioManager.Instance?.PlayClick();
             SavePlayerProfile();
-            string ip = localIpInput != null && !string.IsNullOrWhiteSpace(localIpInput.text) ? localIpInput.text : "127.0.0.1";
-            NetworkLobbyManager.Instance?.JoinLocalClient(ip);
+            lobby?.JoinLocalClient();
         }
 
         private void UpdateStatus(string message)
