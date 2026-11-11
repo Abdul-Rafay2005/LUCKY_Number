@@ -2552,17 +2552,7 @@ MonoBehaviour:
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_text: "<b>GOAL:</b> Work together to hit the target Lucky Number!\n\n\u2022 <b>Turns:</b>
-    Active player secretly rolls 3 dice. Choose 1 die to ADD or SUBTRACT from the
-    shared score.\n\u2022 <b>Skips:</b> Players have limited voluntary skips that
-    don't consume shared moves.\n\u2022 <b>Roles:</b> Most players are Normal; 1-2
-    players are secret Imposters.\n\u2022 <b>Imposter Abilities:</b>\n   - <i>Forced
-    Block:</i> Secretly prevents a player from rolling on their turn.\n   - <i>Lucky
-    Shift:</i> Changes the target Lucky Number by -5 to +5.\n   - <i>Cursed Dice:</i>
-    Secretly biases a player's dice toward bad values.\n\n\u2022 <b>Discussion &
-    Voting:</b> After each round, discuss and vote to eliminate suspected imposters!\n\u2022
-    <b>Win:</b> Normal players win if score reaches Lucky Number OR all imposters
-    eliminated. Imposters win if moves run out OR imposters match living normal players."
+  m_text: "<b>GOAL:</b> Normal players work together to reach the target exactly before the 15 shared moves run out.\n\n\u2022 <b>Turns:</b> The active player privately rolls 3 dice and adds or subtracts one face. Every move spends one shared move. The exact target wins immediately, even on the final move. Overshoots and negative scores are allowed.\n\u2022 <b>Skips:</b> Each player gets ceil(starting players / 4) voluntary skips. A skip uses the turn but no shared move.\n\u2022 <b>Roles:</b> There is 1 secret imposter in a 3–5 player game and 2 in a 6–8 player game.\n\u2022 <b>Imposter abilities:</b> Each imposter can use one ability per round. Forced Block (1 charge) skips a living player's upcoming turn before their roll. Cursed Dice (2 charges) biases two dice while leaving one fair. Both effects can target self; neither reveals the user.\n\u2022 <b>Lucky Shift:</b> The imposter team shares 1 charge to move the target by −5 to −1 or +1 to +5. It cannot set the target to the current score. The active player keeps their roll and gets one reconsideration grace per turn.\n\u2022 <b>Discussion & voting:</b> After everyone takes a turn, discuss for 45 seconds, then vote for a living player or Skip Ejection. Tied suspects enter runoffs; after three identical ties, one tied suspect is chosen at random.\n\u2022 <b>Voice:</b> Discussion uses external voice. Ejected players should stay silent. The game cannot mute external voice, so players must follow this rule themselves.\n\u2022 <b>Win:</b> Normal players win by reaching the target or eliminating every imposter. Imposters win when shared moves run out or living imposters equal or outnumber living normal players."
   m_isRightToLeft: 0
   m_fontAsset: {fileID: 11400000, guid: 8f586378b4e144a9851e7b34d9b748ee, type: 2}
   m_sharedMaterial: {fileID: 2180264, guid: 8f586378b4e144a9851e7b34d9b748ee, type: 2}

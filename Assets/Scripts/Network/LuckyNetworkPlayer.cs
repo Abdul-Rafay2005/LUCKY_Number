@@ -74,6 +74,17 @@ namespace LuckyNumber.Network
         public int LuckyShiftCharges => IsOwner ? secret.Value.ShiftCharges : 0;
         public int CursedDiceCharges => IsOwner ? secret.Value.CurseCharges : 0;
         public int LastAbilityRound => IsOwner ? secret.Value.LastAbilityRound : 0;
+        public int AbilityUsesThisRound
+        {
+            get
+            {
+                if (!IsOwner) return 0;
+                var game = NetworkGameManager.Instance;
+                return game != null && secret.Value.LastAbilityRound == game.CurrentRound.Value
+                    ? secret.Value.AbilityUsesThisRound
+                    : 0;
+            }
+        }
         public FixedList128Bytes<ulong> KnownImposters => IsOwner ? secret.Value.KnownImposters : default;
         public PrivateRoll CurrentRoll => IsOwner ? roll.Value : default;
 

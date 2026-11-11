@@ -1,71 +1,81 @@
 using System;
-using UnityEngine;
-using LuckyNumber.Core;
+using System.Collections.Generic;
 
 namespace LuckyNumber.Gameplay
 {
     /// <summary>
-    /// Generates authoritative dice rolls for players.
-    /// Handles both fair uniform rolls and Cursed Dice rolls.
+    /// Generates authoritative dice rolls. Supplying a random source makes rolls reproducible in tests.
     /// </summary>
     public static class DiceRollGenerator
     {
-        private static readonly System.Random Rng = new System.Random();
+        private static readonly Random DefaultRandom = new Random();
 
         /// <summary>
-        /// Generates a roll of three 6-sided dice (values 1 to 6).
+        /// A cursed roll contains two biased dice and one fair die, shuffled before delivery.
+        /// Each biased die uses the configured chance to draw from the least helpful faces.
         /// </summary>
-        public static int[] RollThreeDice(bool isCursed, int currentScore, int targetScore, float biasStrength)
+        public static int[] RollThreeDice(bool isCursed, int currentScore, int targetScore,
+            float biasStrength, Random random = null)
         {
-            int[] dice = new int[3];
-
-            for (int i = 0; i < 3; i++)
+            Random rng = random ?? DefaultRandom;
+            var dice = new int[3];
+            if (isCursed)
             {
-                if (isCursed && Rng.NextDouble() < biasStrength)
-                {
-                    dice[i] = GenerateBiasedDie(currentScore, targetScore);
-                }
-                else
-                {
-                    dice[i] = Rng.Next(1, 7);
-                }
+                dice[0] = GenerateBiasedDie(currentScore, targetScore, biasStrength, rng);
+                dice[1] = GenerateBiasedDie(currentScore, targetScore, biasStrength, rng);
+                dice[2] = rng.Next(1, 7);
+                Shuffle(dice, rng);
             }
-
+            else
+            {
+                for (int i = 0; i < dice.Length; i++) dice[i] = rng.Next(1, 7);
+            }
             return dice;
         }
 
         /// <summary>
-        /// Biases a die away from the optimal move towards an unfavorable outcome:
-        /// - If team needs a specific number (e.g., target - current = 3), biased away from 3.
-        /// - If current < target, favors 1 (stagnation) or 6 (causes overshoot if gap is small).
-        /// - If current > target, favors 1 (cannot quickly recover with subtraction).
+        /// Returns the faces whose best signed move leaves the greatest distance to target.
         /// </summary>
-        private static int GenerateBiasedDie(int currentScore, int targetScore)
+        public static int[] GetLeastHelpfulFaces(int currentScore, int targetScore)
         {
-            int gap = targetScore - currentScore;
-
-            if (gap > 0)
+            long worstDistance = long.MinValue;
+            var faces = new List<int>();
+            for (int face = 1; face <= 6; face++)
             {
-                // If close to target (gap <= 5), roll numbers that cannot hit the target
-                if (gap >= 1 && gap <= 6)
+                long afterAdd = (long)currentScore + face;
+                long afterSubtract = (long)currentScore - face;
+                long distance = Math.Min(Math.Abs((long)targetScore - afterAdd),
+                    Math.Abs((long)targetScore - afterSubtract));
+                if (distance > worstDistance)
                 {
-                    // Avoid gap! Pick something else
-                    int roll = Rng.Next(1, 6);
-                    if (roll >= gap) roll++;
-                    return Mathf.Clamp(roll, 1, 6);
+                    worstDistance = distance;
+                    faces.Clear();
+                    faces.Add(face);
                 }
-
-                // Far from target: favor rolling 1
-                return (Rng.Next(100) < 65) ? 1 : Rng.Next(1, 7);
+                else if (distance == worstDistance)
+                {
+                    faces.Add(face);
+                }
             }
-            else if (gap < 0)
+            return faces.ToArray();
+        }
+
+        private static int GenerateBiasedDie(int currentScore, int targetScore, float biasStrength, Random rng)
+        {
+            if (rng.NextDouble() >= Math.Clamp(biasStrength, 0f, 1f))
+                return rng.Next(1, 7);
+
+            int[] leastHelpful = GetLeastHelpfulFaces(currentScore, targetScore);
+            return leastHelpful[rng.Next(0, leastHelpful.Length)];
+        }
+
+        private static void Shuffle(int[] values, Random rng)
+        {
+            for (int i = values.Length - 1; i > 0; i--)
             {
-                // Over-target: team needs to subtract. Favor 1 (minimal recovery)
-                return (Rng.Next(100) < 70) ? 1 : Rng.Next(1, 7);
+                int j = rng.Next(0, i + 1);
+                (values[i], values[j]) = (values[j], values[i]);
             }
-
-            return Rng.Next(1, 7);
         }
     }
 }
-

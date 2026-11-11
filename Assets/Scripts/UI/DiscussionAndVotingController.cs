@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Linq;
 using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
@@ -36,7 +37,8 @@ namespace LuckyNumber.UI
         private bool votePending;
         private bool voteAccepted;
         private bool playedRevealSound;
-        private int candidateCount;
+        private string candidateSignature = string.Empty;
+        private ActionStamp renderedVotingAction;
 
         private void OnEnable()
         {
@@ -65,8 +67,19 @@ namespace LuckyNumber.UI
             if (votingTimerText != null) votingTimerText.text = timerStr;
             if (game.CurrentGamePhase.Value == GamePhase.Voting)
             {
-                var candidates = game.GetAllLivingPlayers();
-                if (candidates.Count != candidateCount) BuildVotingCards(candidates);
+                var stamp = game.ActionContext.Value;
+                if (!renderedVotingAction.Equals(stamp))
+                {
+                    renderedVotingAction = stamp;
+                    votePending = false;
+                    voteAccepted = false;
+                    ShowVoteStatus(game.RunoffBallotsPlayed > 0
+                        ? $"Runoff ballot {game.RunoffBallotsPlayed}: choose among the tied candidates."
+                        : null);
+                }
+                var candidates = GetEligibleCandidates();
+                string nextSignature = string.Join(",", candidates.Select(player => player.OwnerClientId));
+                if (nextSignature != candidateSignature) BuildVotingCards(candidates);
                 SetVoteButtons(CanVote());
             }
             else if (game.CurrentGamePhase.Value == GamePhase.Elimination)
@@ -80,12 +93,14 @@ namespace LuckyNumber.UI
             {
                 game.OnPhaseChanged -= HandlePhaseChanged;
                 game.OnActionFeedback -= HandleActionFeedback;
+                game.LastVoteOutcome.OnValueChanged -= HandleVoteOutcomeChanged;
             }
             game = next;
             if (game != null)
             {
                 game.OnPhaseChanged += HandlePhaseChanged;
                 game.OnActionFeedback += HandleActionFeedback;
+                game.LastVoteOutcome.OnValueChanged += HandleVoteOutcomeChanged;
             }
             HandlePhaseChanged(game != null ? game.CurrentGamePhase.Value : GamePhase.Lobby);
         }
@@ -95,9 +110,10 @@ namespace LuckyNumber.UI
             votePending = false;
             voteAccepted = false;
             playedRevealSound = false;
+            renderedVotingAction = game != null ? game.ActionContext.Value : default;
             ShowVoteStatus(null);
             if (phase == GamePhase.Voting)
-                BuildVotingCards(game.GetAllLivingPlayers());
+                BuildVotingCards(GetEligibleCandidates());
             else if (phase == GamePhase.Elimination)
                 ShowEliminationReveal();
         }
@@ -109,7 +125,7 @@ namespace LuckyNumber.UI
                 if (card != null) Destroy(card);
             }
             spawnedVoteCards.Clear();
-            candidateCount = livingPlayers.Count;
+            candidateSignature = string.Join(",", livingPlayers.Select(player => player.OwnerClientId));
 
             if (votingCandidatesContainer == null || voteCandidateCardPrefab == null) return;
             var localPlayer = LuckyNetworkPlayer.LocalPlayer;
@@ -146,6 +162,15 @@ namespace LuckyNumber.UI
             if (skipVoteButton != null) skipVoteButton.interactable = CanVote();
         }
 
+        private List<LuckyNetworkPlayer> GetEligibleCandidates()
+        {
+            if (game == null) return new List<LuckyNetworkPlayer>();
+            var eligible = new HashSet<ulong>();
+            for (int i = 0; i < game.VotingCandidateIds.Count; i++)
+                eligible.Add(game.VotingCandidateIds[i]);
+            return game.GetAllLivingPlayers().Where(player => eligible.Contains(player.OwnerClientId)).ToList();
+        }
+
         private bool CanVote()
         {
             var local = LuckyNetworkPlayer.LocalPlayer;
@@ -179,6 +204,13 @@ namespace LuckyNumber.UI
             ShowVoteStatus(message);
         }
 
+        private void HandleVoteOutcomeChanged(VoteOutcomeSnapshot previous, VoteOutcomeSnapshot next)
+        {
+            if (game != null && game.CurrentGamePhase.Value == GamePhase.Voting &&
+                next.Kind == VoteOutcomeKind.DisconnectCancellation)
+                ShowVoteStatus(next.Message.ToString());
+        }
+
         private void ShowVoteStatus(string message)
         {
             if (voteSubmittedStatusText == null) return;
@@ -201,36 +233,60 @@ namespace LuckyNumber.UI
 
         private void ShowEliminationReveal()
         {
-            string elimName = game.LastEliminatedPlayerName.Value.ToString();
-            PlayerRole elimRole = game.LastEliminatedRole.Value;
-
-            if (string.IsNullOrEmpty(elimName))
-            {
-                if (eliminatedPlayerNameText != null) eliminatedPlayerNameText.text = "TIE VOTE / NO ELIMINATION";
-                if (revealedRoleText != null) revealedRoleText.text = "The team could not agree. No one was eliminated!";
-                if (revealedRoleIcon != null) revealedRoleIcon.gameObject.SetActive(false);
-            }
-            else
+            var outcome = game.LastVoteOutcome.Value;
+            if (outcome.Kind == VoteOutcomeKind.Ejection || outcome.Kind == VoteOutcomeKind.RandomEjection)
             {
                 if (!playedRevealSound)
                 {
                     AudioManager.Instance?.PlayAlarm();
                     playedRevealSound = true;
                 }
-                if (eliminatedPlayerNameText != null) eliminatedPlayerNameText.text = $"{elimName} WAS ELIMINATED!";
+                string eliminatedName = outcome.PlayerName.ToString();
+                PlayerRole eliminatedRole = outcome.PlayerRole;
+                if (eliminatedPlayerNameText != null) eliminatedPlayerNameText.text = $"{eliminatedName} WAS ELIMINATED!";
                 if (revealedRoleText != null)
                 {
-                    revealedRoleText.text = elimRole == PlayerRole.Imposter
-                        ? "THEY WERE AN IMPOSTER! 🎉"
-                        : "THEY WERE A NORMAL PLAYER... 😢";
-                    revealedRoleText.color = elimRole == PlayerRole.Imposter ? Color.red : Color.cyan;
+                    revealedRoleText.text = eliminatedRole == PlayerRole.Imposter
+                        ? "THEY WERE AN IMPOSTER!"
+                        : "THEY WERE A NORMAL PLAYER...";
+                    revealedRoleText.color = eliminatedRole == PlayerRole.Imposter ? Color.red : Color.cyan;
                 }
-
                 if (revealedRoleIcon != null)
                 {
                     revealedRoleIcon.gameObject.SetActive(true);
-                    revealedRoleIcon.sprite = (elimRole == PlayerRole.Imposter) ? imposterMaskSprite : normalBadgeSprite;
+                    revealedRoleIcon.sprite = eliminatedRole == PlayerRole.Imposter ? imposterMaskSprite : normalBadgeSprite;
                 }
+            }
+            else
+            {
+                string heading;
+                string details = outcome.Message.ToString();
+                switch (outcome.Kind)
+                {
+                    case VoteOutcomeKind.NoVotes:
+                        heading = "NO VOTES CAST";
+                        break;
+                    case VoteOutcomeKind.SkipEjection:
+                        heading = "SKIP EJECTION";
+                        break;
+                    case VoteOutcomeKind.DisconnectCancellation:
+                        heading = "BALLOT CANCELED";
+                        break;
+                    default:
+                        heading = "NO ELIMINATION";
+                        details = string.IsNullOrEmpty(details)
+                            ? "The team could not agree. No one was eliminated."
+                            : details;
+                        break;
+                }
+                if (eliminatedPlayerNameText != null) eliminatedPlayerNameText.text = heading;
+                if (revealedRoleText != null)
+                {
+                    revealedRoleText.text = details;
+                    revealedRoleText.color = Color.white;
+                }
+                if (revealedRoleIcon != null)
+                    revealedRoleIcon.gameObject.SetActive(false);
             }
         }
     }

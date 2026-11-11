@@ -1,6 +1,6 @@
 # Lucky Number implementation checklist
 
-Updated: 2026-11-09. Phase 1 is complete and Phase 2 is in progress. Follow plan.md for findings G01–G22 and progression.md for current status. Each numbered section implements the corresponding delivery phase, in dependency order.
+Updated: 2026-11-11. Phase 1 is complete; Phase 2 implementation is substantially complete, with integrated verification still open. Follow plan.md for findings G01–G22 and progression.md for current status. Each numbered section implements the corresponding delivery phase, in dependency order.
 
 ## 1 Establish baseline and lock the jam rules
 
@@ -15,70 +15,76 @@ Updated: 2026-11-09. Phase 1 is complete and Phase 2 is in progress. Follow plan
 
 ## 2 Repair authoritative multiplayer state
 
-Paused at the chat's quota reserve. The roster checkpoint passed. Items 2.3–2.19 remain open pending integrated verification. Rebuild the isolated Windows player with the final rehost fix, then rerun the authority and session scenarios using the harness's new mailbox retry. See progression.md and docs/validation.md.
+Implementation items 2.3–2.6 and 2.8–2.18 are present and compiled. Item 2.7 remains open because the final rehost stamp fix has not passed the integrated authority run; item 2.19 is the outstanding Phase 2 test matrix. See progression.md and docs/validation.md.
 
 ### 2A Public roster and private state (G06–G08, G14)
 
 - [x] 2.1 Add a client-visible roster keyed by client ID and maintained by LuckyNetworkPlayer's spawn/despawn lifecycle. All three registries cleared on tested shutdown.
 - [x] 2.2 Use spawned players for client UI lookups and keep server connection checks for authority. A host and two localhost clients saw the same IDs, profiles, roster count, and three lobby cards.
-- [ ] 2.3 Add explicit server match-player state for roles, remaining ability charges, pending effects and per-round ability usage. Initialize every player on every match; never use owner-local display fields as the authoritative budget.
-- [ ] 2.4 Deliver role, private dice and budget snapshots only to the intended owner. Deliver any shared imposter-team charge updates only to imposters. Decide and implement teammate-identity visibility instead of discarding otherImposters silently.
-- [ ] 2.5 Remove public pending-block state. If indistinguishable skips are adopted, keep remaining personal skips private too. Audit public fields, feed entries, debugging output and UI for unintended role/effect disclosure.
-- [ ] 2.6 Add server acknowledgments/rejection reasons for actions and abilities. Update private counts from server state; play success feedback only after acceptance.
+- [x] 2.3 Add explicit server match-player state for roles, remaining ability charges, pending effects and per-round ability usage. Initialize every player on every match; never use owner-local display fields as the authoritative budget.
+- [x] 2.4 Deliver role, private dice and budget snapshots only to the intended owner. Deliver any shared imposter-team charge updates only to imposters. Decide and implement teammate-identity visibility instead of discarding otherImposters silently.
+- [x] 2.5 Remove public pending-block state. If indistinguishable skips are adopted, keep remaining personal skips private too. Audit public fields, feed entries, debugging output and UI for unintended role/effect disclosure.
+- [x] 2.6 Add server acknowledgments/rejection reasons for actions and abilities. Update private counts from server state; play success feedback only after acceptance.
 
 ### 2B Validate every state mutation (G07, G10, G15, G17)
 
 - [ ] 2.7 Define session/match/turn identifiers and a single path to validate phase, sender membership, alive status, active turn and allowed action. Consume the authorized roll once. Prevent stale requests from a previous turn/match being reused.
-- [ ] 2.8 Guard start/rematch with host authority, allowed phase, minimum/maximum players and adopted readiness policy. Prevent mid-match restart RPCs.
-- [ ] 2.9 Apply caster alive/role/phase/budget/round-cap checks to all ability RPCs; validate target and timing before spending a charge. Return actionable private rejection feedback.
-- [ ] 2.10 Make MatchEnded terminal. Block subsequent moves, effects, votes and timer transitions; separate explicit rematch initialization from ordinary phase updates.
-- [ ] 2.11 Replace anonymous subscriptions with removable handlers. Clear handlers/state on despawn and rebind when a new manager/player instance appears. Ensure UI can read current state after missing an event.
+- [x] 2.8 Guard start/rematch with host authority, allowed phase, minimum/maximum players and adopted readiness policy. Prevent mid-match restart RPCs.
+- [x] 2.9 Apply caster alive/role/phase/budget/round-cap checks to all ability RPCs; validate target and timing before spending a charge. Return actionable private rejection feedback.
+- [x] 2.10 Make MatchEnded terminal. Block subsequent moves, effects, votes and timer transitions; separate explicit rematch initialization from ordinary phase updates.
+- [x] 2.11 Replace anonymous subscriptions with removable handlers. Clear handlers/state on despawn and rebind when a new manager/player instance appears. Ensure UI can read current state after missing an event.
 
 ### 2C Sessions and departures (G17–G18, G22)
 
-- [ ] 2.12 Implement explicit Idle/Connecting/InRoom/Leaving/Error connection state. Disable duplicate requests; handle StartHost/StartClient return values and connection/disconnection callbacks. Show lobby only after successful connection.
-- [ ] 2.13 Add connection approval for capacity and late-join policy. Lock the cloud lobby on match start where appropriate; maintain server validation independently of the cloud listing.
-- [ ] 2.14 On partial create/join failure, remove the cloud membership or created lobby and stop networking as appropriate. Prevent overlapping initialization/heartbeat/leave operations and handle host loss with a clear return-to-menu reason.
-- [ ] 2.15 Fix duplicate NetworkLobbyManager instance handling so destroying a duplicate does not call LeaveRoom on the active session. Clear singleton ownership deliberately on destruction.
-- [ ] 2.16 For LAN support, provide an IP input and deliberate listen address rather than only 127.0.0.1; otherwise label the existing option as same-machine testing. Verify separately from Relay.
-- [ ] 2.17 Use a stable round schedule/cursor or remaining-turn queue. Removing a player must not skip the next living player's opportunity. Clear departed players' rolls, votes and pending effects according to docs/rules.md.
-- [ ] 2.18 Handle departures only in relevant phases: lobby roster update, active-turn continuation, voting re-evaluation, and defined match-end policy. Avoid applying normal match wins while still in lobby or after a result.
+- [x] 2.12 Implement explicit Idle/Connecting/InRoom/Leaving/Error connection state. Disable duplicate requests; handle StartHost/StartClient return values and connection/disconnection callbacks. Show lobby only after successful connection.
+- [x] 2.13 Add connection approval for capacity and late-join policy. Lock the cloud lobby on match start where appropriate; maintain server validation independently of the cloud listing.
+- [x] 2.14 On partial create/join failure, remove the cloud membership or created lobby and stop networking as appropriate. Prevent overlapping initialization/heartbeat/leave operations and handle host loss with a clear return-to-menu reason.
+- [x] 2.15 Fix duplicate NetworkLobbyManager instance handling so destroying a duplicate does not call LeaveRoom on the active session. Clear singleton ownership deliberately on destruction.
+- [x] 2.16 For LAN support, provide an IP input and deliberate listen address rather than only 127.0.0.1; otherwise label the existing option as same-machine testing. Verify separately from Relay.
+- [x] 2.17 Use a stable round schedule/cursor or remaining-turn queue. Removing a player must not skip the next living player's opportunity. Clear departed players' rolls, votes and pending effects according to docs/rules.md.
+- [x] 2.18 Handle departures only in relevant phases: lobby roster update, active-turn continuation, voting re-evaluation, and defined match-end policy. Avoid applying normal match wins while still in lobby or after a result.
 - [ ] 2.19 Test host plus two clients: matching rosters, targeted role/dice privacy, repeated requests, dead caster, failed connection, active/inactive departure, leave/rejoin and host loss. Exit: record actual outcomes and unresolved defects.
 
 ## 3 Align the gameplay rules
 
+Implementation checkboxes reflect source-level completion; runtime checks called out in item text remain open unless independently verified.
+
 ### 3A Moves skips and wins (G01, G04–G05, G10, G12)
 
-- [ ] 3.1 Extract a server move-resolution helper used by both player submission and timeout. Inputs identify the active turn and a server-authorized die/sign; mutate score and spend exactly one move atomically.
-- [ ] 3.2 For adopted timeout policy, randomly select one existing die and a sign server-side. Resolve through the same helper; clear the roll and advance once. Test repeated timeouts exhaust shared moves.
-- [ ] 3.3 Compute personal skip budgets at match setup from the adopted policy; do not recompute after ejections. Voluntary skip spends only personal budget; block spends neither budget. Both consume the scheduled turn.
-- [ ] 3.4 Split win checks by cause: committed move checks target before exhaustion; vote resolution checks last imposter/parity; disconnect uses its explicit policy. Reject or otherwise handle shift-to-current-score as documented.
-- [ ] 3.5 Add an ordered public event model with sequence, round, actor, kind, selected value/sign, resulting score and remaining moves. Include only publicly permitted information and use a bounded replicated history or reliable event stream with snapshot recovery.
-- [ ] 3.6 Clear match history and all pending state on rematch. Retain final result long enough for every client to render it.
+- [x] 3.1 Extract a server move-resolution helper used by both player submission and timeout. Inputs identify the active turn and a server-authorized die/sign; mutate score and spend exactly one move atomically.
+- [x] 3.2 Implement timeout selection of one existing die and a server-picked sign; resolve through the shared move path, clear the roll and advance once.
+- [x] 3.2a Test repeated timeout move resolutions exhaust the shared move pool and that each selected die belongs to the authorized roll.
+- [x] 3.3 Compute personal skip budgets at match setup from the adopted policy; do not recompute after ejections. Voluntary skip spends only personal budget; block spends neither budget. Both consume the scheduled turn.
+- [x] 3.4 Split win checks by cause: committed move checks target before exhaustion; vote resolution checks last imposter/parity; disconnect uses its explicit policy. Reject or otherwise handle shift-to-current-score as documented.
+- [x] 3.5 Add an ordered public event model with sequence, round, actor, kind, selected value/sign, resulting score and remaining moves. Include only publicly permitted information and use a bounded replicated history or reliable event stream with snapshot recovery.
+- [x] 3.6 Clear match history and all pending state on rematch. Retain final result long enough for every client to render it.
 
 ### 3B Abilities (G06–G11)
 
-- [ ] 3.7 Schedule block and curse for a specific eligible upcoming turn, including self-targets. Define current-player-after-roll behavior and duplicate-effect stacking. Reject invalid windows without spending charges.
-- [ ] 3.8 Emit the same public skipped-turn event for blocked and voluntary skips if that policy is adopted. Notify the victim only through the chosen private mechanism.
-- [ ] 3.9 Implement a team-wide Lucky Shift budget if adopted. Allow the ten legal deltas, preserve the active roll, and apply the agreed one-time reconsideration grace without allowing repeated timer extensions.
-- [ ] 3.10 Serialize shift/commit processing on the authority; if the move has already won, reject the shift. Test both arrival orders and two imposters attempting the final shared charge.
-- [ ] 3.11 Refactor DiceRollGenerator to accept a seeded/injected random source for repeatable tests. Implement two biased dice plus one fair die if adopted, with values always 1–6 and no public curse announcement.
-- [ ] 3.12 Define unfavorable options using both addition and subtraction, including overshoot and near-target cases. Test the bias distribution over many seeded rolls; do not confuse difficult rolls with guaranteed impossibility prevention.
-- [ ] 3.13 Verify one block, two curses, shared shift and per-round cap according to adopted settings; test rematch resets for host and remote imposters.
+- [x] 3.7 Schedule block and curse for a specific eligible upcoming turn, including self-targets. Define current-player-after-roll behavior and duplicate-effect stacking. Reject invalid windows without spending charges.
+- [x] 3.8 Emit the same public skipped-turn event for blocked and voluntary skips. The victim sees the ordinary skip outcome; no block-specific public event is emitted.
+- [x] 3.9 Implement the team-wide Lucky Shift budget, ten legal deltas, active-roll preservation, and one-time reconsideration grace per active turn.
+- [x] 3.10 Serialize shift/commit processing on the authority; if the move has already won, phase validation rejects a later shift.
+- [x] 3.10a Edit Mode tests cover shift-before-move, a target-winning move before a later shift, and two imposter attempts to consume the final team charge. Live RPC timing remains in 6.4.
+- [x] 3.11 Refactor DiceRollGenerator to accept a seeded random source. Cursed rolls use two biasable dice plus one fair die, shuffled before delivery; all values remain 1–6 and curse state is not published.
+- [x] 3.12 Rank unfavorable faces by the best signed move, covering overshoot and near-target cases. Seeded tests check bias frequency; the system does not promise a reachable target.
+- [x] 3.13 Initialize one block and two curse charges per imposter, one shared shift charge, and enforce the configured per-round cap; reset budgets on match initialization.
+- [ ] 3.13a Verify those budgets and rematch resets for host and remote imposters in a multiplayer run.
 
 ### 3C Voting and reveal (G02–G03, G16, G19)
 
-- [ ] 3.14 Represent Skip Ejection as an explicit ballot choice, distinct from abstention/no response. Count it against suspect candidates. Test two skip ballots versus one suspect ballot.
-- [ ] 3.15 Extract a pure tally function with the chosen plurality/majority, self-vote, skip-tie and no-vote rules. Validate voter/target eligibility and one accepted ballot per round/runoff.
-- [ ] 3.16 If runoffs are adopted, retain a sorted tied-candidate set and repeated-tie counter. Restrict subsequent candidates, reset ballots/timer, define counter reset when the tied set changes, and use server randomness only at the agreed threshold.
-- [ ] 3.17 Store the resolved outcome before revealing the phase, or synchronize an outcome snapshot that UI observes directly. Distinguish skip win, no votes, tie, ejection and disconnect cancellation.
-- [ ] 3.18 Apply ejection and role reveal once; check terminal role-count wins in the adopted order. Make eliminated players spectators and reject all influence requests server-side.
-- [ ] 3.19 If external voice is selected, explain discussion timing and dead-player silence in onboarding; record that software cannot enforce external muting. If in-game text is selected, add server phase/alive validation, length/rate limits, safe text rendering and a readable chat panel before declaring silence enforced.
-- [ ] 3.20 Test no votes, all skip, unique suspect, mixed skip/suspect, ties, changed runoff sets, third repeated tie, departed voter/candidate, last imposter and parity. Exit: all adopted rule paths have results recorded.
+- [x] 3.14 Represent Skip Ejection as an explicit ballot choice, distinct from abstention/no response, and count it against suspect candidates.
+- [x] 3.14a Test two skip ballots versus one suspect ballot.
+- [x] 3.15 Extract a pure plurality tally with skip-tie/no-vote handling; server validation checks living voters, eligible candidates, and one ballot per window.
+- [x] 3.16 Retain sorted tied candidates, restrict each runoff to that set, reset ballots/timer, reset repeat counts when the set changes, and choose randomly after three identical tied results. Stop after three runoff ballots.
+- [x] 3.17 Publish a synchronized vote outcome snapshot before phase changes; distinguish no votes, Skip Ejection, ties/runoffs, ejections, random ejections, and disconnect cancellation. UI reads the snapshot for reveals and cancellation feedback.
+- [x] 3.18 Apply ejection and role reveal once; check terminal role-count wins in the adopted order. Eliminated players become spectators and server validation rejects their influence requests.
+- [x] 3.19 How to Play explains discussion timing, external voice, ejected-player silence, and that the game cannot mute external voice.
+- [x] 3.20 Edit Mode tests cover no votes, all skip, unique suspect, mixed skip/suspect, ties, changed runoff sets, third repeated tie, departed voter/candidate filtering, last imposter and parity. Live disconnect/session behavior remains in 6.3–6.4.
 
 ## 4 Make the complete match operable through UI
 
-- [ ] 4.1 Make LuckyUIManager the single phase router. Remove competing panel navigation from GameplayController. Avoid toggling an already-correct panel unnecessarily.
+- [x] 4.1 Make LuckyUIManager the single phase router. GameplayController no longer navigates phase panels; it manages only its private dice/ability controls.
 - [ ] 4.2 Bind click callbacks once or remove exact handlers on disable. Hydrate dice, role, charges, roster, phase and history from current state whenever a panel/player binds. Clear dice after the turn and on session exit.
 - [ ] 4.3 Build a private RoleReveal panel with role objective/countdown and connect it to RoleReveal phase. Test event delivery before and after panel activation.
 - [ ] 4.4 Add the ability target picker with stable client-ID data, not IDs parsed from displayed names. Include self when legal. Refresh only when eligibility/profile changes, retaining valid selection.

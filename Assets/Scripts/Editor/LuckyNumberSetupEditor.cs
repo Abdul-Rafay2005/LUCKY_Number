@@ -561,16 +561,15 @@ namespace LuckyNumber.Editor
 
             CreateText("HTPTitle", modal.transform, "HOW TO PLAY LUCKY NUMBER", 32, Color.yellow, new Vector2(0.5f, 0.92f), new Vector2(700, 50));
 
-            string rules = "<b>GOAL:</b> Work together to hit the target Lucky Number!\n\n" +
-                "• <b>Turns:</b> Active player secretly rolls 3 dice. Choose 1 die to ADD or SUBTRACT from the shared score.\n" +
-                "• <b>Skips:</b> Players have limited voluntary skips that don't consume shared moves.\n" +
-                "• <b>Roles:</b> Most players are Normal; 1-2 players are secret Imposters.\n" +
-                "• <b>Imposter Abilities:</b>\n" +
-                "   - <i>Forced Block:</i> Secretly prevents a player from rolling on their turn.\n" +
-                "   - <i>Lucky Shift:</i> Changes the target Lucky Number by -5 to +5.\n" +
-                "   - <i>Cursed Dice:</i> Secretly biases a player's dice toward bad values.\n\n" +
-                "• <b>Discussion & Voting:</b> After each round, discuss and vote to eliminate suspected imposters!\n" +
-                "• <b>Win:</b> Normal players win if score reaches Lucky Number OR all imposters eliminated. Imposters win if moves run out OR imposters match living normal players.";
+            string rules = "<b>GOAL:</b> Normal players work together to reach the target exactly before the 15 shared moves run out.\n\n" +
+                "• <b>Turns:</b> The active player privately rolls 3 dice and adds or subtracts one face. Every move spends one shared move. The exact target wins immediately, even on the final move. Overshoots and negative scores are allowed.\n" +
+                "• <b>Skips:</b> Each player gets ceil(starting players ÷ 4) voluntary skips. A skip uses the turn but no shared move.\n" +
+                "• <b>Roles:</b> There is 1 secret imposter in a 3–5 player game and 2 in a 6–8 player game.\n" +
+                "• <b>Imposter abilities:</b> Each imposter can use one ability per round. Forced Block (1 charge) skips a living player's upcoming turn before their roll. Cursed Dice (2 charges) biases two dice while leaving one fair. Both effects can target self; neither reveals the user.\n" +
+                "• <b>Lucky Shift:</b> The imposter team shares 1 charge to move the target by −5 to −1 or +1 to +5. It cannot set the target to the current score. The active player keeps their roll and gets one reconsideration grace per turn.\n" +
+                "• <b>Discussion & voting:</b> After everyone takes a turn, discuss for 45 seconds, then vote for a living player or Skip Ejection. Tied suspects enter runoffs; after three identical ties, one tied suspect is chosen at random.\n" +
+                "• <b>Voice:</b> Discussion uses external voice. Ejected players should stay silent. The game cannot mute external voice, so players must follow this rule themselves.\n" +
+                "• <b>Win:</b> Normal players win by reaching the target or eliminating every imposter. Imposters win when shared moves run out or living imposters equal or outnumber living normal players.";
 
             var body = CreateText("HTPBody", modal.transform, rules, 18, Color.white, new Vector2(0.5f, 0.5f), new Vector2(780, 460));
             body.alignment = TextAlignmentOptions.TopLeft;

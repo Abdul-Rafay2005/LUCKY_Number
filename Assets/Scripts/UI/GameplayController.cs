@@ -58,6 +58,7 @@ namespace LuckyNumber.UI
         private ActionStamp renderedAction;
         private bool movePending;
         private bool abilityPending;
+        private readonly List<ulong> abilityTargetIds = new List<ulong>();
         private string privateFeedback;
         private float feedbackUntil;
 
@@ -87,16 +88,17 @@ namespace LuckyNumber.UI
             if (!ReferenceEquals(game, null))
             {
                 game.OnScoreUpdated -= UpdateScoreboard;
-                game.LastCommittedMove.OnValueChanged -= HandleNewMoveCommitted;
+                game.OnPublicHistoryChanged -= HydratePublicHistory;
                 game.OnActionFeedback -= HandleActionFeedback;
             }
             game = next;
             if (game != null)
             {
                 game.OnScoreUpdated += UpdateScoreboard;
-                game.LastCommittedMove.OnValueChanged += HandleNewMoveCommitted;
+                game.OnPublicHistoryChanged += HydratePublicHistory;
                 game.OnActionFeedback += HandleActionFeedback;
                 UpdateScoreboard();
+                HydratePublicHistory();
             }
         }
 
@@ -177,14 +179,12 @@ namespace LuckyNumber.UI
 
             if (luckyShiftSlider != null)
             {
-                luckyShiftSlider.minValue = -5;
-                luckyShiftSlider.maxValue = 5;
+                // Ten slider stops map to -5..-1 and +1..+5; zero is never a legal option.
+                luckyShiftSlider.minValue = 0;
+                luckyShiftSlider.maxValue = 9;
                 luckyShiftSlider.wholeNumbers = true;
-                luckyShiftSlider.onValueChanged.AddListener(val => {
-                    int delta = (int)val;
-                    if (delta == 0) delta = 1; // Non-zero
-                    if (luckyShiftDeltaText != null) luckyShiftDeltaText.text = $"Shift: {delta:+#;-#;0}";
-                });
+                luckyShiftSlider.onValueChanged.AddListener(UpdateShiftPreview);
+                UpdateShiftPreview(luckyShiftSlider.value);
             }
         }
 
@@ -283,13 +283,23 @@ namespace LuckyNumber.UI
             if (roundInfoText != null) roundInfoText.text = $"ROUND {game.CurrentRound.Value}";
         }
 
-        private void HandleNewMoveCommitted(Unity.Collections.FixedString128Bytes prev, Unity.Collections.FixedString128Bytes next)
+        private void HydratePublicHistory()
         {
-            if (moveHistoryText != null && next.Length > 0)
+            if (moveHistoryText == null || game == null) return;
+            var lines = new List<string>(game.PublicHistory.Count);
+            foreach (var entry in game.PublicHistory)
             {
-                moveHistoryText.text += $"\n• {next}";
+                string name = entry.ActorName.ToString();
+                string line = entry.Kind switch
+                {
+                    PublicEventKind.NumberMove => $"{name} played {entry.SignedValue:+#;-#;0} (Score: {entry.ResultingScore}, Moves: {entry.RemainingMoves})",
+                    PublicEventKind.Skip => $"{name} skipped (Score: {entry.ResultingScore}, Moves: {entry.RemainingMoves})",
+                    PublicEventKind.TargetShift => $"{name} shifted the target by {entry.SignedValue:+#;-#;0} to {entry.ResultingTarget}",
+                    _ => name
+                };
+                lines.Add($"R{entry.Round}  {line}");
             }
-            UpdateScoreboard();
+            moveHistoryText.text = string.Join("\n", lines);
         }
 
         private void UpdateAbilityDrawer(LuckyNetworkPlayer localPlayer, bool playerTurn)
@@ -299,16 +309,29 @@ namespace LuckyNumber.UI
             if (imposterDrawer != null) imposterDrawer.SetActive(isImposter);
             if (!isImposter) return;
 
-            // Populate target dropdown with living other players
-            if (abilityTargetDropdown != null && abilityTargetDropdown.options.Count != game.GetAllLivingPlayers().Count)
+            // Keep stable client IDs separately from the human-readable option labels.
+            var living = game.GetAllLivingPlayers();
+            bool targetsChanged = abilityTargetIds.Count != living.Count;
+            if (!targetsChanged)
+                for (int i = 0; i < living.Count; i++)
+                    if (abilityTargetIds[i] != living[i].OwnerClientId) { targetsChanged = true; break; }
+            if (abilityTargetDropdown != null && targetsChanged)
             {
+                ulong selectedId = GetSelectedDropdownTargetId();
                 abilityTargetDropdown.ClearOptions();
+                abilityTargetIds.Clear();
                 var options = new List<string>();
-                foreach (var p in game.GetAllLivingPlayers())
+                foreach (var p in living)
                 {
-                    options.Add($"{p.PlayerName.Value} (#{p.OwnerClientId})");
+                    abilityTargetIds.Add(p.OwnerClientId);
+                    options.Add(p.OwnerClientId == localPlayer.OwnerClientId
+                        ? $"{p.PlayerName.Value} (You)"
+                        : p.PlayerName.Value.ToString());
                 }
                 abilityTargetDropdown.AddOptions(options);
+                int priorSelection = abilityTargetIds.IndexOf(selectedId);
+                abilityTargetDropdown.value = priorSelection >= 0 ? priorSelection : 0;
+                abilityTargetDropdown.RefreshShownValue();
             }
 
             if (forcedBlockText != null) forcedBlockText.text = $"Forced Block ({localPlayer.ForcedBlockCharges})";
@@ -316,7 +339,7 @@ namespace LuckyNumber.UI
             if (cursedDiceText != null) cursedDiceText.text = $"Cursed Dice ({localPlayer.CursedDiceCharges})";
 
             bool canUse = playerTurn && localPlayer.IsAlive.Value && !abilityPending &&
-                localPlayer.LastAbilityRound != game.CurrentRound.Value;
+                localPlayer.AbilityUsesThisRound < game.Settings.abilityActivationsPerImposterPerRound;
             if (forcedBlockButton != null) forcedBlockButton.interactable = canUse && localPlayer.ForcedBlockCharges > 0;
             if (luckyShiftButton != null) luckyShiftButton.interactable = canUse && localPlayer.LuckyShiftCharges > 0;
             if (cursedDiceButton != null) cursedDiceButton.interactable = canUse && localPlayer.CursedDiceCharges > 0;
@@ -332,8 +355,7 @@ namespace LuckyNumber.UI
 
         private void OnUseLuckyShift()
         {
-            int delta = (int)(luckyShiftSlider != null ? luckyShiftSlider.value : 1);
-            if (delta == 0) delta = 1;
+            int delta = GetShiftDelta(luckyShiftSlider != null ? (int)luckyShiftSlider.value : 5);
 
             if (game == null || abilityPending) return;
             abilityPending = true;
@@ -350,15 +372,18 @@ namespace LuckyNumber.UI
 
         private ulong GetSelectedDropdownTargetId()
         {
-            if (abilityTargetDropdown == null || abilityTargetDropdown.options.Count == 0) return ulong.MaxValue;
-            string selectedText = abilityTargetDropdown.options[abilityTargetDropdown.value].text;
-            int hashIndex = selectedText.IndexOf('#');
-            if (hashIndex >= 0 && ulong.TryParse(selectedText.Substring(hashIndex + 1).Trim(')'), out ulong id))
-            {
-                return id;
-            }
-            return ulong.MaxValue;
+            if (abilityTargetDropdown == null || abilityTargetDropdown.value < 0 ||
+                abilityTargetDropdown.value >= abilityTargetIds.Count) return ulong.MaxValue;
+            return abilityTargetIds[abilityTargetDropdown.value];
         }
+
+        private void UpdateShiftPreview(float sliderValue)
+        {
+            int delta = GetShiftDelta(Mathf.RoundToInt(sliderValue));
+            if (luckyShiftDeltaText != null) luckyShiftDeltaText.text = $"Shift: {delta:+#;-#;0}";
+        }
+
+        private static int GetShiftDelta(int stop) => stop < 5 ? stop - 5 : stop - 4;
 
         private void HandleActionFeedback(ActionStamp stamp, MatchAction action, bool accepted, string message)
         {

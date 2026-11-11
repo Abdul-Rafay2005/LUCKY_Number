@@ -1,0 +1,22 @@
+{
+  "name": "LuckyNumber.EditModeTests",
+  "rootNamespace": "LuckyNumber.Tests",
+  "references": [
+    "LuckyNumber.Core",
+    "LuckyNumber.Gameplay"
+  ],
+  "includePlatforms": [
+    "Editor"
+  ],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": false,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ],
+  "noEngineReferences": false
+}
