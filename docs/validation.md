@@ -140,3 +140,5 @@ The harness controls phase pacing with fixtures. Human playtests, Relay, cross-m
 - Three Windows test players used real anonymous Unity Authentication, Lobby room creation and code join, and Relay transport through the main menu. They started a match, verified private role and dice delivery, committed a move through the UI, voted, reached results, rematched, and left. The three processes ran on one machine. Cross-machine acceptance remains open.
 - The Unity editor printed its project-link warning in batch mode. Live Authentication, Lobby, and Relay worked with the configured project during the smoke test.
 - The shareable Windows x64 package is generated from the production master scene. Validation driver source stays in `Tools/Validation` outside the production Assets tree.
+- Extracted the production ZIP and launched its Windows player at 1280×720. It loaded without startup exceptions. Verified the executable, Unity runtime DLL, managed game assembly, and README were packaged. The production game assembly contains neither validation driver.
+- Artifact: \uilds/release/LuckyNumber-Windows-x64.zip\. SHA-256: \$hash\.

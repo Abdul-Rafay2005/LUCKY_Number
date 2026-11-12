@@ -30,3 +30,4 @@ Phase 5 is complete through `todo.md` item 5.14. Phase 6 covers Relay and cross-
 - Added Windows launch, room-code and voice instructions in `README.md`.
 - Three Windows peers passed a live Unity Authentication, Lobby, and Relay smoke test using the configured Unity project. They played a move, voted, rematched, and left. All processes ran on one machine. Cross-machine acceptance and human playtesting remain open.
 - Production Windows package output is local under `builds/release`. Keep validation fixtures outside production Assets.
+- Production source was pushed to GitHub main in commit 46876eb. The extracted Windows x64 ZIP launched successfully. The next acceptance step is to share the ZIP with another Windows machine and verify a room-code join across networks.
