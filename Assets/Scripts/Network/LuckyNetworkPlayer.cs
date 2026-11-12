@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Unity.Collections;
 using Unity.Netcode;
@@ -16,6 +17,8 @@ namespace LuckyNumber.Network
             new SortedDictionary<ulong, LuckyNetworkPlayer>();
 
         public static IReadOnlyDictionary<ulong, LuckyNetworkPlayer> SpawnedPlayers => spawnedPlayers;
+        public static event Action RosterChanged;
+        public event Action ProfileChanged;
 
         public static LuckyNetworkPlayer FindSpawnedPlayer(ulong clientId) =>
             spawnedPlayers.TryGetValue(clientId, out var player) ? player : null;
@@ -53,6 +56,8 @@ namespace LuckyNumber.Network
             NetworkVariableReadPermission.Everyone,
             NetworkVariableWritePermission.Server);
 
+        public readonly NetworkVariable<int> LastScheduledRound = new NetworkVariable<int>();
+
         public NetworkVariable<int> RemainingSkips = new NetworkVariable<int>(
             0,
             NetworkVariableReadPermission.Owner,
@@ -68,7 +73,15 @@ namespace LuckyNumber.Network
         private readonly NetworkVariable<PrivateRoll> roll =
             new NetworkVariable<PrivateRoll>(default, NetworkVariableReadPermission.Owner);
 
-        public bool HasSecretRole => IsOwner && secret.Value.HasRole;
+        public bool HasSecretRole
+        {
+            get
+            {
+                var game = NetworkGameManager.Instance;
+                return IsOwner && secret.Value.HasRole && game != null && game.IsSpawned &&
+                    secret.Value.MatchId == game.ActionContext.Value.MatchId;
+            }
+        }
         public PlayerRole LocalRole => IsOwner ? secret.Value.Role : PlayerRole.Normal;
         public int ForcedBlockCharges => IsOwner ? secret.Value.BlockCharges : 0;
         public int LuckyShiftCharges => IsOwner ? secret.Value.ShiftCharges : 0;
@@ -95,6 +108,9 @@ namespace LuckyNumber.Network
         {
             base.OnNetworkSpawn();
             spawnedPlayers[OwnerClientId] = this;
+            PlayerName.OnValueChanged += HandleProfileChange;
+            CharacterIndex.OnValueChanged += HandleProfileChange;
+            IsReady.OnValueChanged += HandleProfileChange;
 
             if (IsOwner)
             {
@@ -103,15 +119,24 @@ namespace LuckyNumber.Network
                 int savedChar = PlayerPrefs.GetInt("SelectedCharacter", (int)(OwnerClientId % 6));
                 SetProfileServerRpc(savedName, savedChar);
             }
+            RosterChanged?.Invoke();
         }
 
         public override void OnNetworkDespawn()
         {
+            PlayerName.OnValueChanged -= HandleProfileChange;
+            CharacterIndex.OnValueChanged -= HandleProfileChange;
+            IsReady.OnValueChanged -= HandleProfileChange;
             if (FindSpawnedPlayer(OwnerClientId) == this)
+            {
                 spawnedPlayers.Remove(OwnerClientId);
+                RosterChanged?.Invoke();
+            }
 
             base.OnNetworkDespawn();
         }
+
+        private void HandleProfileChange<T>(T previous, T current) => ProfileChanged?.Invoke();
 
         [ServerRpc]
         public void SetProfileServerRpc(FixedString64Bytes name, int charIndex)

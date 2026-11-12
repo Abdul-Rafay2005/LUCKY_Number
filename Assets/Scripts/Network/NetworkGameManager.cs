@@ -93,7 +93,7 @@ namespace LuckyNumber.Network
         public GameSettings Settings => settings;
         public NetworkList<PublicGameEvent> PublicHistory => publicHistory;
         public NetworkList<ulong> VotingCandidateIds => votingCandidateIds;
-        public int RunoffBallotsPlayed => runoffBallotsPlayed;
+        public int RunoffBallotsPlayed => LastVoteOutcome.Value.RunoffBallot;
 
         public event Action<GamePhase> OnPhaseChanged;
         public event Action OnScoreUpdated;
@@ -144,7 +144,7 @@ namespace LuckyNumber.Network
             {
                 ActionContext, TargetLuckyNumber, CurrentScore, RemainingMoves, CurrentRound, ActivePlayerClientId,
                 CurrentGamePhase, PhaseTimer, WinningTeam, MatchWinReason, LastCommittedMove,
-                LastEliminatedPlayerName, LastEliminatedRole, LastVoteOutcome
+                LastEliminatedPlayerName, LastEliminatedRole, LastVoteOutcome, publicHistory, votingCandidateIds
             };
             foreach (var variable in variables)
                 variable.Initialize(this);
@@ -226,6 +226,7 @@ namespace LuckyNumber.Network
             serverPlayers.Clear();
             serverVotes.Clear();
             serverAbstainVotes.Clear();
+            serverSkipVotes.Clear();
             teamShiftCharges = 0;
             shiftGraceUsedThisTurn = false;
             turnOrder.Clear();
@@ -277,6 +278,7 @@ namespace LuckyNumber.Network
                 var secret = new PlayerSecret
                 {
                     HasRole = true,
+                    MatchId = newStamp.MatchId,
                     Role = isImposter ? PlayerRole.Imposter : PlayerRole.Normal,
                     BlockCharges = isImposter ? settings.forcedBlockUsesPerMatch : 0,
                     ShiftCharges = isImposter ? settings.luckyShiftUsesPerMatch : 0,
@@ -292,6 +294,7 @@ namespace LuckyNumber.Network
                 serverPlayers.Add(client, new MatchPlayer { Secret = secret });
                 var player = GetPlayer(client);
                 player.IsAlive.Value = true;
+                player.LastScheduledRound.Value = 0;
                 player.RemainingSkips.Value = personalSkips;
                 player.HasVoted.Value = false;
                 player.SetSecret(secret);
@@ -318,6 +321,7 @@ namespace LuckyNumber.Network
 
                 var state = serverPlayers[activeId];
                 var player = GetPlayer(activeId);
+                player.LastScheduledRound.Value = CurrentRound.Value;
                 if (state.BlockPending)
                 {
                     state.BlockPending = false;
@@ -600,12 +604,14 @@ namespace LuckyNumber.Network
         private void RecordPublicEvent(PublicEventKind kind, ulong actorId, int signedValue)
         {
             if (!IsServer) return;
-            var actor = GetPlayer(actorId);
+            // Anonymous sabotage must not identify its caster in the payload either.
+            bool anonymous = kind == PublicEventKind.TargetShift;
+            var actor = anonymous ? null : GetPlayer(actorId);
             var entry = new PublicGameEvent
             {
                 Sequence = nextPublicEventSequence++,
                 Round = CurrentRound.Value,
-                ActorClientId = actorId,
+                ActorClientId = anonymous ? ulong.MaxValue : actorId,
                 ActorName = actor != null ? actor.PlayerName.Value : default,
                 Kind = kind,
                 SignedValue = signedValue,
@@ -728,7 +734,7 @@ namespace LuckyNumber.Network
                     {
                         ulong selected = result.LeadingCandidates[UnityEngine.Random.Range(0, result.LeadingCandidates.Count)];
                         Eliminate(selected);
-                        LastCommittedMove.Value = $"{LastCommittedMove.Value} Randomly selected after three identical tied ballots.";
+                        LastCommittedMove.Value = $"{LastEliminatedPlayerName.Value} ejected by tie-break. Role: {LastEliminatedRole.Value}.";
                         SetVoteOutcome(VoteOutcomeKind.RandomEjection, selected, LastCommittedMove.Value.ToString());
                     }
                     else if (followup == TieFollowup.StartRunoff)
@@ -748,7 +754,7 @@ namespace LuckyNumber.Network
                     break;
             }
 
-            if (CheckRoleWins()) return;
+            if (CheckRoleWins(showElimination: true)) return;
             PhaseTimer.Value = settings.eliminationDurationSeconds;
             CurrentGamePhase.Value = GamePhase.Elimination;
         }
@@ -763,6 +769,7 @@ namespace LuckyNumber.Network
             votingCandidateIds.Clear();
             foreach (ulong candidate in tiedCandidates) votingCandidateIds.Add(candidate);
             foreach (var player in GetAllLivingPlayers()) player.HasVoted.Value = false;
+            voteOpen = true;
             PhaseTimer.Value = settings.votingDurationSeconds;
             LastCommittedMove.Value = $"Runoff ballot {runoffBallotsPlayed}: vote among the tied candidates.";
             SetVoteOutcome(VoteOutcomeKind.RunoffStarted, 0, LastCommittedMove.Value.ToString());
@@ -789,6 +796,7 @@ namespace LuckyNumber.Network
             var outcome = new VoteOutcomeSnapshot
             {
                 Kind = kind,
+                RunoffBallot = runoffBallotsPlayed,
                 Stamp = ActionContext.Value,
                 PlayerId = hasEjectedPlayer ? playerId : 0,
                 PlayerName = player != null ? player.PlayerName.Value : default,
@@ -804,28 +812,28 @@ namespace LuckyNumber.Network
 
         #region Win Conditions & Phase Resolution
 
-        private bool CheckRoleWins()
+        private bool CheckRoleWins(bool showElimination = false)
         {
             int livingImposters = serverPlayers.Values.Count(player => player.Alive && player.Secret.Role == PlayerRole.Imposter);
             int livingNormals = serverPlayers.Values.Count(player => player.Alive && player.Secret.Role == PlayerRole.Normal);
             Team winner = WinRules.GetRoleCountWinner(livingImposters, livingNormals);
             if (winner == Team.NormalTeam)
             {
-                EndMatch(Team.NormalTeam, WinReason.AllImpostersEliminated);
+                EndMatch(Team.NormalTeam, WinReason.AllImpostersEliminated, showElimination);
                 return true;
             }
             if (winner == Team.ImposterTeam)
             {
-                EndMatch(Team.ImposterTeam, WinReason.ImposterParity);
+                EndMatch(Team.ImposterTeam, WinReason.ImposterParity, showElimination);
                 return true;
             }
 
             return false;
         }
 
-        private void EndMatch(Team winner, WinReason reason)
+        private void EndMatch(Team winner, WinReason reason, bool showElimination = false)
         {
-            if (CurrentGamePhase.Value == GamePhase.MatchEnded) return;
+            if (WinningTeam.Value != Team.None) return;
             ClearActiveTurn();
             voteOpen = false;
             WinningTeam.Value = winner;
@@ -842,7 +850,9 @@ namespace LuckyNumber.Network
             };
 
             LastCommittedMove.Value = $"Game Over! {winner} Wins — {reasonText}";
-            CurrentGamePhase.Value = GamePhase.MatchEnded;
+            // Freeze the outcome now, but let everyone see the final ejection first.
+            PhaseTimer.Value = showElimination ? settings.eliminationDurationSeconds : 0f;
+            CurrentGamePhase.Value = showElimination ? GamePhase.Elimination : GamePhase.MatchEnded;
         }
 
         private void HandlePhaseTimerExpired()
@@ -868,6 +878,11 @@ namespace LuckyNumber.Network
                     break;
 
                 case GamePhase.Elimination:
+                    if (WinningTeam.Value != Team.None)
+                    {
+                        CurrentGamePhase.Value = GamePhase.MatchEnded;
+                        break;
+                    }
                     CurrentRound.Value++;
                     nextTurnIndex = 0;
                     StartNextTurn();
@@ -882,7 +897,7 @@ namespace LuckyNumber.Network
         private void HandleServerClientDisconnect(ulong clientId)
         {
             var phase = CurrentGamePhase.Value;
-            if (!IsServer || NetworkManager.ShutdownInProgress || phase == GamePhase.Lobby ||
+            if (!IsServer || WinningTeam.Value != Team.None || NetworkManager.ShutdownInProgress || phase == GamePhase.Lobby ||
                 phase == GamePhase.MatchEnded || !serverPlayers.Remove(clientId, out var departed))
                 return;
 

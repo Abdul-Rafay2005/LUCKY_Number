@@ -21,7 +21,7 @@ namespace LuckyNumber.UI
         private void OnClose()
         {
             AudioManager.Instance?.PlayClick();
-            gameObject.SetActive(false);
+            LuckyUIManager.Instance?.ToggleHowToPlay(false);
         }
     }
 }

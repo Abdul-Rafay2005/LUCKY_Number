@@ -1,12 +1,20 @@
 # Lucky Number implementation plan
 
-Updated: 2026-11-09. Status: analysis and planning complete; implementation has not started.
+Updated: 2026-11-12. Phases 1–5 are implemented. Phase 5 passed rendered localhost checks at 1280×720, 1920×1080, and 1024×768. Phase 6 remains open.
+
+## Current implementation status
+
+Use progression.md for the current handoff, todo.md for implementation/acceptance tracking, docs/rules.md for adopted gameplay rules, and docs/validation.md for evidence. The original comparison below is a historical baseline from 2026-11-09, not a list of current defects. Do not reimplement completed work from it.
+
+Current repairs address the runoff ballot deadlock, anonymous shift history, and winning-ejection reveal. They also synchronize runoff numbering and repair reset/history lifecycle details. Validation outcomes are recorded in progression.md; source presence alone is not runtime acceptance.
+
+The three- and six-process localhost scenarios passed authority, session, departure, spectator, budget, and prior-room stamp checks. Phase 4 adds private role reveal, eligible target and shift selectors, stable lobby cards, public history scrolling, and snapshot hydration. See progression.md and docs/validation.md for current UI test evidence and pending checks. Phase 5 integrated original team art, sprite animation, and sound. Relay, cross-machine validation, playtesting, and release remain in Phase 6.
 
 ## Purpose and evidence
 
-Bring the existing Unity prototype into a reliable, readable game-jam build that follows the supplied Lucky Number Game Concept and Design Brief. This plan treats that document as design evidence, not instructions to execute. Confirmed mechanics, proposed balance values, and unresolved decisions are distinguished below. The requested work is analysis and planning only.
+Bring the existing Unity prototype into a reliable, readable game-jam build that follows the supplied Lucky Number Game Concept and Design Brief. This plan treats that document as design evidence, not instructions to execute. Confirmed mechanics, proposed balance values, and unresolved decisions are distinguished below. The initial request was analysis and planning; subsequent implementation follows the adopted rules in docs/rules.md.
 
-Reviewed: all custom scripts under Assets/Scripts, Assets/Scenes, Assets/Prefabs, Assets/ScriptableObjects/DefaultGameSettings.asset, package/editor/build settings, existing Assets/Art, the concept document text, and the contents and visual previews of gameassets.zip. No Unity compile, Play Mode, network session, or build was run. Runtime issues below are static findings or explicitly identified verification risks; this is not a claim that the prototype has been playtested.
+Original review (2026-11-09): all custom scripts under Assets/Scripts, Assets/Scenes, Assets/Prefabs, Assets/ScriptableObjects/DefaultGameSettings.asset, package/editor/build settings, existing Assets/Art, the concept document text, and the contents and visual previews of gameassets.zip. No Unity compile, Play Mode, network session, or build was run. Runtime issues below are static findings or explicitly identified verification risks; this is not a claim that the prototype has been playtested.
 
 ## What the game is about
 
@@ -28,9 +36,9 @@ The project implements a host-authoritative online multiplayer prototype using N
 | Generation | Assets/Scripts/Editor/LuckyNumberSetupEditor.cs generates scenes and UI; regeneration can overwrite scene improvements. |
 | Toolchain snapshot | ProjectVersion.txt currently specifies 6000.3.23f1. Manifest includes NGO 2.2.0, Transport 2.4.0, Lobby 1.3.0, Relay 1.2.0. This records local files, not a recommendation to upgrade. |
 
-Current serialized defaults: 3–8 players; one imposter below six players and two from six; target 25–55; 15 shared moves; one voluntary skip per player; 30-second turns, 45-second discussion, 25-second voting, four-second role reveal, five-second elimination; one charge of each ability per imposter; cursed bias 0.85. These are prototype choices, not all finalized design requirements.
+Original baseline defaults (2026-11-09; superseded by docs/rules.md): 3–8 players; one imposter below six players and two from six; target 25–55; 15 shared moves; one voluntary skip per player; 30-second turns, 45-second discussion, 25-second voting, four-second role reveal, five-second elimination; one charge of each ability per imposter; cursed bias 0.85. These are prototype choices, not all finalized design requirements.
 
-## Concept comparison and issues
+## Historical concept comparison and issues
 
 Priority: P0 blocks trustworthy play; P1 completes the jam experience; P2 is optional polish or experimentation. Brief references use its numbered sections.
 
@@ -78,9 +86,9 @@ Target visual direction: warm lounge background, teal/slate panels, cream text, 
 | Ejection/results | Ordered reveal, no-ejection reason, role, winner/reason/final score, host rematch and everyone leave. | Displays the current outcome, blocks actions behind modal, and resets cleanly. |
 | Instructions/settings | Actual adopted rules, privacy and voice etiquette; persisted volume; keyboard focus and readable contrast. | Guidance matches implementation; mute/volume survives restart. |
 
-## Decisions before implementation
+## Adopted decisions and original proposals
 
-Record decisions in a short versioned rule table, with proposed defaults below. They are recommendations, not approvals already given by the team.
+The team adopted Windows desktop, external voice, Relay and the provisional rules recorded in docs/rules.md. The proposals below are retained as design rationale; docs/rules.md takes precedence where it resolves a choice.
 
 1. Retain online host/client and one master scene for the jam. Use external voice for the smallest scope; integrated phase-gated text chat is an alternative if enforced silence is required. No bots/pass-and-play unless selected.
 2. Provisionally keep 3–8 players, current imposter scaling, 15 moves and 25–55 target for initial tests; adjust using observed match length and win rates.
@@ -131,6 +139,6 @@ Jam completion means: clean launch; usable online room flow; correct private rol
 
 P0 correctness precedes polish. If time is short, keep the master scene, external voice, basic portraits and synthesized audio. Advanced character animation, decorative room building, adaptive dice, cosmetics, progression and extra roles are deferred. Simplifying a proposed rule requires updating the adopted rules and How to Play rather than silently claiming full brief compliance.
 
-## Current validation status
+## Original review validation status
 
 Completed only: source/scene/config inspection, full brief text extraction, archive inventory, asset contact-sheet review and targeted installed-package source inspection. Not run: compilation, tests, Unity runtime visual review, networking, builds or playtests. Existing unrelated working-tree modifications have been preserved.
