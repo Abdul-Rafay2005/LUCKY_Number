@@ -141,4 +141,4 @@ The harness controls phase pacing with fixtures. Human playtests, Relay, cross-m
 - The Unity editor printed its project-link warning in batch mode. Live Authentication, Lobby, and Relay worked with the configured project during the smoke test.
 - The shareable Windows x64 package is generated from the production master scene. Validation driver source stays in `Tools/Validation` outside the production Assets tree.
 - Extracted the production ZIP and launched its Windows player at 1280×720. It loaded without startup exceptions. Verified the executable, Unity runtime DLL, managed game assembly, and README were packaged. The production game assembly contains neither validation driver.
-- Artifact: \uilds/release/LuckyNumber-Windows-x64.zip\. SHA-256: \$hash\.
+- Artifact `builds/release/LuckyNumber-Windows-x64.zip` has SHA-256 `6aaeceec5c76223df978ccecbfe8a075c42643e48a23a51f955ab3befc591132`.
