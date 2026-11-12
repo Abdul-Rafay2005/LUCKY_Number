@@ -12,6 +12,7 @@ namespace LuckyNumber.UI
 {
     public class DiscussionAndVotingController : MonoBehaviour
     {
+        [SerializeField] private SpriteBurst acceptedVoteEffect;
         [Header("Discussion Phase UI")]
         [SerializeField] private TMP_Text discussionTimerText;
         [SerializeField] private Transform livingPlayersContainer;
@@ -33,10 +34,11 @@ namespace LuckyNumber.UI
         [SerializeField] private Sprite normalBadgeSprite;
 
         private readonly List<GameObject> spawnedVoteCards = new List<GameObject>();
+        private readonly Dictionary<ulong, TMP_Text> candidateStatuses = new Dictionary<ulong, TMP_Text>();
         private NetworkGameManager game;
         private bool votePending;
         private bool voteAccepted;
-        private bool playedRevealSound;
+        private ActionStamp soundedEjection;
         private string candidateSignature = string.Empty;
         private ActionStamp renderedVotingAction;
 
@@ -78,8 +80,18 @@ namespace LuckyNumber.UI
                         : null);
                 }
                 var candidates = GetEligibleCandidates();
-                string nextSignature = string.Join(",", candidates.Select(player => player.OwnerClientId));
+                string nextSignature = CandidateSignature(candidates);
                 if (nextSignature != candidateSignature) BuildVotingCards(candidates);
+                foreach (var candidate in candidates)
+                    if (candidateStatuses.TryGetValue(candidate.OwnerClientId, out var label))
+                        label.text = candidate.IsOwner
+                            ? (candidate.HasVoted.Value ? "YOU · VOTED" : "YOU")
+                            : (candidate.HasVoted.Value ? "VOTED" : "");
+                var local = LuckyNetworkPlayer.LocalPlayer;
+                if (local != null && !local.IsAlive.Value)
+                    ShowVoteStatus("Spectating");
+                else if (local != null && local.HasVoted.Value && !voteAccepted)
+                    ShowVoteStatus("Ballot submitted.");
                 SetVoteButtons(CanVote());
             }
             else if (game.CurrentGamePhase.Value == GamePhase.Elimination)
@@ -109,7 +121,6 @@ namespace LuckyNumber.UI
         {
             votePending = false;
             voteAccepted = false;
-            playedRevealSound = false;
             renderedVotingAction = game != null ? game.ActionContext.Value : default;
             ShowVoteStatus(null);
             if (phase == GamePhase.Voting)
@@ -122,14 +133,15 @@ namespace LuckyNumber.UI
         {
             foreach (var card in spawnedVoteCards)
             {
-                if (card != null) Destroy(card);
+                if (card == null) continue;
+                card.SetActive(false);
+                Destroy(card);
             }
             spawnedVoteCards.Clear();
-            candidateSignature = string.Join(",", livingPlayers.Select(player => player.OwnerClientId));
+            candidateStatuses.Clear();
+            candidateSignature = CandidateSignature(livingPlayers);
 
             if (votingCandidatesContainer == null || voteCandidateCardPrefab == null) return;
-            var localPlayer = LuckyNetworkPlayer.LocalPlayer;
-
             foreach (var p in livingPlayers)
             {
                 // Can vote for anyone including self or other living players
@@ -140,10 +152,8 @@ namespace LuckyNumber.UI
                 var images = cardObj.GetComponentsInChildren<Image>();
                 var btn = cardObj.GetComponentInChildren<Button>();
 
-                string pName = p.PlayerName.Value.ToString();
-                if (p == localPlayer) pName += " (You)";
-
-                if (texts.Length > 0) texts[0].text = pName;
+                if (texts.Length > 0) texts[0].text = PlayerNameLabel.Compact(p.PlayerName.Value.ToString());
+                if (texts.Length > 1) candidateStatuses[p.OwnerClientId] = texts[1];
 
                 int charIdx = p.CharacterIndex.Value;
                 if (images.Length > 1 && characterPortraits != null && charIdx >= 0 && charIdx < characterPortraits.Length)
@@ -161,6 +171,9 @@ namespace LuckyNumber.UI
 
             if (skipVoteButton != null) skipVoteButton.interactable = CanVote();
         }
+
+        private static string CandidateSignature(List<LuckyNetworkPlayer> candidates) =>
+            string.Join("\n", candidates.Select(player => $"{player.OwnerClientId}/{player.CharacterIndex.Value}/{player.PlayerName.Value}"));
 
         private List<LuckyNetworkPlayer> GetEligibleCandidates()
         {
@@ -200,14 +213,18 @@ namespace LuckyNumber.UI
                 !stamp.Equals(game.ActionContext.Value)) return;
             votePending = false;
             voteAccepted = accepted;
-            if (accepted) AudioManager.Instance?.PlayClick();
+            if (accepted)
+            {
+                AudioManager.Instance?.PlayVote();
+                acceptedVoteEffect?.Play();
+            }
             ShowVoteStatus(message);
         }
 
         private void HandleVoteOutcomeChanged(VoteOutcomeSnapshot previous, VoteOutcomeSnapshot next)
         {
             if (game != null && game.CurrentGamePhase.Value == GamePhase.Voting &&
-                next.Kind == VoteOutcomeKind.DisconnectCancellation)
+                (next.Kind == VoteOutcomeKind.DisconnectCancellation || next.Kind == VoteOutcomeKind.RunoffStarted))
                 ShowVoteStatus(next.Message.ToString());
         }
 
@@ -236,10 +253,10 @@ namespace LuckyNumber.UI
             var outcome = game.LastVoteOutcome.Value;
             if (outcome.Kind == VoteOutcomeKind.Ejection || outcome.Kind == VoteOutcomeKind.RandomEjection)
             {
-                if (!playedRevealSound)
+                if (!soundedEjection.Equals(outcome.Stamp))
                 {
-                    AudioManager.Instance?.PlayAlarm();
-                    playedRevealSound = true;
+                    AudioManager.Instance?.PlayEjection();
+                    soundedEjection = outcome.Stamp;
                 }
                 string eliminatedName = outcome.PlayerName.ToString();
                 PlayerRole eliminatedRole = outcome.PlayerRole;
@@ -249,7 +266,7 @@ namespace LuckyNumber.UI
                     revealedRoleText.text = eliminatedRole == PlayerRole.Imposter
                         ? "THEY WERE AN IMPOSTER!"
                         : "THEY WERE A NORMAL PLAYER...";
-                    revealedRoleText.color = eliminatedRole == PlayerRole.Imposter ? Color.red : Color.cyan;
+                    revealedRoleText.color = eliminatedRole == PlayerRole.Imposter ? new Color32(255, 135, 125, 255) : Color.cyan;
                 }
                 if (revealedRoleIcon != null)
                 {

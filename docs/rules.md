@@ -1,8 +1,8 @@
 # Lucky Number jam rules
 
-Revision 1, 2026-11-09. These are the provisional rules for implementation and playtesting. The Phase 1 baseline records the prototype's current behavior in [validation.md](validation.md). Authority, rule, and UI changes are scheduled in Phases 2–4 of [the checklist](../todo.md).
+Revision 2, 2026-11-11. These are the provisional rules for implementation and playtesting. The Phase 1 baseline records the prototype's current behavior in [validation.md](validation.md). Authority and rule code is implemented with integration verification still open; UI work remains in Phase 4 of [the checklist](../todo.md).
 
-The master scene uses `DefaultGameSettings.asset`. Its four-second role reveal replaces the five-second transient fallback previously used by that scene. The asset's **Jam Rule Policies** group stores staged timeout, skip, and sabotage settings. The current prototype continues to use its existing skip and ability budget fields until the server rule changes are implemented.
+The master scene uses `DefaultGameSettings.asset`. Its four-second role reveal replaces the five-second transient fallback previously used by that scene. The asset's **Jam Rule Policies** group stores the adopted timeout, skip, and sabotage settings. The server now consumes the adopted skip, curse, round-cap and reconsideration policies. Lucky Shift uses a shared team pool; the legacy per-imposter scope/curse fields are not the active jam rules.
 
 ## Release and entry point
 
@@ -33,7 +33,7 @@ Target Windows x64 desktop with mouse and keyboard. Verify 1280×720, 1920×1080
 ## 4. Information disclosure
 
 - The owner sees their role, current dice, personal skip balance, and applicable ability budgets and feedback. Imposters privately learn teammate identities and their shared shift balance.
-- The public history shows the actor, signed number move, resulting score, and moves remaining. Target changes are public. Voluntary skips and blocks share the same public skip event. A blocked player sees the ordinary skip outcome. A cursed player may see a private indicator that keeps each face readable.
+- The public history shows the actor, signed number move, resulting score, and moves remaining. Target changes are public, but their public event contains no caster ID or name. Voluntary skips and blocks share the same public skip event. A blocked player sees the ordinary skip outcome. A cursed player may see a private indicator that keeps each face readable.
 - The listen-server host owns authoritative match data. Privacy acceptance checks compare ordinary client views.
 
 ## 5. Voting and runoffs
@@ -46,7 +46,7 @@ Target Windows x64 desktop with mouse and keyboard. Verify 1280×720, 1920×1080
 ## 6. Wins and disconnects
 
 - After an accepted number move, check exact target equality before move exhaustion. Equality gives normal players the win, including on the last shared move. Exhaustion without equality gives imposters the win.
-- After voting or an active-match player departure that changes living role counts, normal players win if no imposters remain. Otherwise imposters win if living imposters equal or outnumber living normal players. Apply role-count outcomes after resolving the vote or departure.
+- After voting or an active-match player departure that changes living role counts, normal players win if no imposters remain. Otherwise imposters win if living imposters equal or outnumber living normal players. Apply role-count outcomes after resolving the vote or departure. A winning vote locks its winner immediately and shows the five-second ejection reveal before results; no actions or departures can alter that locked result. Departure-only wins go directly to results.
 - Host departure ends the session. A nonhost departure removes the player and their pending roll, turn, effects, and ballot from future play. Apply the role-count check, then continue the match if neither team has won. Reject backfill or reconnect during an active match. Lobby departures only change the roster.
 
 ## 7. Communication

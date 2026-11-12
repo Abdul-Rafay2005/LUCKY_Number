@@ -30,7 +30,17 @@ namespace LuckyNumber.UI
         [Header("Status Feedback")]
         [SerializeField] private TMP_Text statusMessageText;
 
-        private readonly List<GameObject> activePlayerCards = new List<GameObject>();
+        private sealed class PlayerCard
+        {
+            public GameObject View;
+            public LuckyNetworkPlayer Player;
+            public TMP_Text[] Labels;
+            public Image Portrait;
+            public System.Action Refresh;
+        }
+
+        private readonly Dictionary<ulong, PlayerCard> activePlayerCards = new Dictionary<ulong, PlayerCard>();
+        private readonly List<ulong> removedPlayers = new List<ulong>();
 
         private void OnEnable()
         {
@@ -39,6 +49,7 @@ namespace LuckyNumber.UI
             if (startMatchButton != null) startMatchButton.onClick.AddListener(OnStartMatchClicked);
             if (leaveRoomButton != null) leaveRoomButton.onClick.AddListener(OnLeaveRoom);
 
+            LuckyNetworkPlayer.RosterChanged += UpdateLobbyView;
             UpdateLobbyView();
         }
 
@@ -48,13 +59,10 @@ namespace LuckyNumber.UI
             if (readyButton != null) readyButton.onClick.RemoveListener(OnToggleReady);
             if (startMatchButton != null) startMatchButton.onClick.RemoveListener(OnStartMatchClicked);
             if (leaveRoomButton != null) leaveRoomButton.onClick.RemoveListener(OnLeaveRoom);
-
-        }
-
-        private void Update()
-        {
-            // Regularly refresh lobby stats and readiness
-            UpdateLobbyView();
+            LuckyNetworkPlayer.RosterChanged -= UpdateLobbyView;
+            foreach (var card in activePlayerCards.Values)
+                RemoveCard(card);
+            activePlayerCards.Clear();
         }
 
         private void UpdateLobbyView()
@@ -76,10 +84,10 @@ namespace LuckyNumber.UI
             {
                 playerCountText.text = $"Players: {connectedCount} / {maxAllowed} (Min: {minNeeded})";
             }
+            RefreshReadyLabel();
             var local = LuckyNetworkPlayer.LocalPlayer;
             bool inLobby = game != null && game.IsSpawned && game.CurrentGamePhase.Value == GamePhase.Lobby;
             if (readyButton != null) readyButton.interactable = inLobby && local != null;
-            if (readyButtonText != null) readyButtonText.text = local != null && local.IsReady.Value ? "UNREADY" : "READY";
 
             bool isHost = NetworkManager.Singleton.IsHost;
 
@@ -89,9 +97,11 @@ namespace LuckyNumber.UI
                 bool canStart = inLobby && connectedCount >= minNeeded && connectedCount <= maxAllowed;
                 startMatchButton.interactable = canStart;
 
-                if (isHost && statusMessageText != null)
+                if (statusMessageText != null)
                 {
-                    statusMessageText.text = !inLobby ? "Starting match..." : canStart
+                    statusMessageText.text = !inLobby ? "Starting match..." : !isHost
+                        ? "Waiting for the host to start."
+                        : canStart
                         ? "Ready to start match!"
                         : $"Need {minNeeded}–{maxAllowed} players ({connectedCount} connected).";
                 }
@@ -102,40 +112,70 @@ namespace LuckyNumber.UI
 
         private void RefreshPlayerCards()
         {
-            // Clear existing
-            foreach (var card in activePlayerCards)
+            removedPlayers.Clear();
+            foreach (var entry in activePlayerCards)
             {
-                if (card != null) Destroy(card);
+                if (LuckyNetworkPlayer.FindSpawnedPlayer(entry.Key) == entry.Value.Player) continue;
+                RemoveCard(entry.Value);
+                removedPlayers.Add(entry.Key);
             }
-            activePlayerCards.Clear();
+            foreach (ulong id in removedPlayers)
+                activePlayerCards.Remove(id);
 
             if (playerListContainer == null || playerCardPrefab == null) return;
 
             foreach (var netPlayer in LuckyNetworkPlayer.SpawnedPlayers.Values)
             {
+                if (activePlayerCards.ContainsKey(netPlayer.OwnerClientId)) continue;
                 var cardObj = Instantiate(playerCardPrefab, playerListContainer);
-                activePlayerCards.Add(cardObj);
-
-                var texts = cardObj.GetComponentsInChildren<TMP_Text>();
                 var images = cardObj.GetComponentsInChildren<Image>();
-
-                string pName = netPlayer.PlayerName.Value.ToString();
-                bool isCardHost = netPlayer.OwnerClientId == NetworkManager.ServerClientId;
-                bool isReady = netPlayer.IsReady.Value;
-
-                // Set player name text
-                if (texts.Length > 0) texts[0].text = isCardHost ? $"{pName} 👑 (Host)" : pName;
-                if (texts.Length > 1) texts[1].text = isReady ? "READY" : "WAITING";
-
-                // Set portrait image
-                int charIdx = netPlayer.CharacterIndex.Value;
-                if (images.Length > 1 && characterPortraits != null && charIdx >= 0 && charIdx < characterPortraits.Length)
+                var card = new PlayerCard
                 {
-                    images[1].sprite = characterPortraits[charIdx];
-                }
+                    View = cardObj,
+                    Player = netPlayer,
+                    Labels = cardObj.GetComponentsInChildren<TMP_Text>(),
+                    Portrait = images.Length > 1 ? images[1] : null
+                };
+                var button = cardObj.GetComponent<Button>();
+                if (button != null) button.enabled = false;
+                card.Refresh = () => RefreshCard(card);
+                netPlayer.ProfileChanged += card.Refresh;
+                activePlayerCards.Add(netPlayer.OwnerClientId, card);
+                RefreshCard(card);
             }
         }
 
+        private void RefreshCard(PlayerCard card)
+        {
+            var player = card.Player;
+            if (card.Labels.Length > 0)
+                card.Labels[0].text = PlayerNameLabel.Compact(player.PlayerName.Value.ToString());
+            if (card.Labels.Length > 1)
+            {
+                string readiness = player.IsReady.Value ? "READY" : "WAITING";
+                card.Labels[1].text = player.OwnerClientId == NetworkManager.ServerClientId ? $"HOST · {readiness}" : readiness;
+                card.Labels[1].color = player.IsReady.Value
+                    ? new Color32(147, 230, 200, 255)
+                    : new Color32(250, 237, 209, 255);
+            }
+            int index = player.CharacterIndex.Value;
+            if (card.Portrait != null && characterPortraits != null && index >= 0 && index < characterPortraits.Length)
+                card.Portrait.sprite = characterPortraits[index];
+            if (player.IsOwner) RefreshReadyLabel();
+        }
+
+        private void RefreshReadyLabel()
+        {
+            var local = LuckyNetworkPlayer.LocalPlayer;
+            if (readyButtonText != null) readyButtonText.text = local != null && local.IsReady.Value ? "UNREADY" : "READY";
+        }
+
+        private void RemoveCard(PlayerCard card)
+        {
+            card.Player.ProfileChanged -= card.Refresh;
+            card.View.SetActive(false);
+            Destroy(card.View);
+        }
         private void OnCopyCode()
         {
             AudioManager.Instance?.PlayClick();

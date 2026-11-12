@@ -12,20 +12,20 @@ namespace LuckyNumber.UI
     {
         [Header("Results Header")]
         [SerializeField] private TMP_Text winnerTitleText;
+        [SerializeField] private TMP_Text localOutcomeText;
         [SerializeField] private TMP_Text winReasonText;
         [SerializeField] private TMP_Text finalScoreSummaryText;
 
         [Header("Controls")]
         [SerializeField] private Button playAgainButton;
         [SerializeField] private Button returnToMenuButton;
-        private Team displayedWinner;
+        private ActionStamp soundedResult;
 
         private void OnEnable()
         {
             if (playAgainButton != null) playAgainButton.onClick.AddListener(OnPlayAgain);
             if (returnToMenuButton != null) returnToMenuButton.onClick.AddListener(OnReturnToMenu);
 
-            displayedWinner = Team.None;
             DisplayResults();
         }
 
@@ -37,30 +37,30 @@ namespace LuckyNumber.UI
 
         private void DisplayResults()
         {
-            if (NetworkGameManager.Instance == null) return;
+            var game = NetworkGameManager.Instance;
+            if (game == null) return;
 
-            Team winner = NetworkGameManager.Instance.WinningTeam.Value;
-            WinReason reason = NetworkGameManager.Instance.MatchWinReason.Value;
-            int score = NetworkGameManager.Instance.CurrentScore.Value;
-            int target = NetworkGameManager.Instance.TargetLuckyNumber.Value;
+            Team winner = game.WinningTeam.Value;
+            WinReason reason = game.MatchWinReason.Value;
+            int score = game.CurrentScore.Value;
+            int target = game.TargetLuckyNumber.Value;
 
             if (winnerTitleText != null)
             {
                 if (winner == Team.NormalTeam)
                 {
-                    winnerTitleText.text = "🎉 TEAM VICTORY! 🎉";
-                    winnerTitleText.color = Color.green;
-                    if (displayedWinner != winner) AudioManager.Instance?.PlayVictory();
+                    winnerTitleText.text = "NORMAL PLAYERS WIN";
+                    winnerTitleText.color = new Color32(145, 242, 195, 255);
                 }
                 else if (winner == Team.ImposterTeam)
                 {
-                    winnerTitleText.text = "😈 IMPOSTERS WIN! 😈";
-                    winnerTitleText.color = Color.red;
-                    if (displayedWinner != winner) AudioManager.Instance?.PlayAlarm();
+                    winnerTitleText.text = "IMPOSTERS WIN";
+                    winnerTitleText.color = new Color32(255, 135, 125, 255);
                 }
                 else winnerTitleText.text = string.Empty;
-                displayedWinner = winner;
             }
+
+            DisplayLocalOutcome(winner, game.ActionContext.Value);
 
             if (winReasonText != null)
             {
@@ -83,10 +83,33 @@ namespace LuckyNumber.UI
             {
                 bool isHost = NetworkManager.Singleton != null && NetworkManager.Singleton.IsHost;
                 playAgainButton.gameObject.SetActive(isHost);
-                var settings = NetworkGameManager.Instance.Settings;
+                var settings = game.Settings;
                 int count = LuckyNetworkPlayer.SpawnedPlayers.Count;
                 playAgainButton.interactable = isHost && count >= settings.minPlayers && count <= settings.maxPlayers;
             }
+        }
+
+        private void DisplayLocalOutcome(Team winner, ActionStamp stamp)
+        {
+            var local = LuckyNetworkPlayer.LocalPlayer;
+            if (winner == Team.None || local == null || !local.HasSecretRole)
+            {
+                if (localOutcomeText != null) localOutcomeText.text = string.Empty;
+                return;
+            }
+
+            Team localTeam = local.LocalRole == PlayerRole.Imposter ? Team.ImposterTeam : Team.NormalTeam;
+            bool won = winner == localTeam;
+            if (localOutcomeText != null)
+            {
+                localOutcomeText.text = won ? "VICTORY" : "DEFEAT";
+                localOutcomeText.color = won ? new Color32(145, 242, 195, 255) : new Color32(255, 135, 125, 255);
+            }
+
+            if (soundedResult.SessionId == stamp.SessionId && soundedResult.MatchId == stamp.MatchId) return;
+            soundedResult = stamp;
+            if (won) AudioManager.Instance?.PlayVictory();
+            else AudioManager.Instance?.PlayDefeat();
         }
 
         private void Update() => DisplayResults();

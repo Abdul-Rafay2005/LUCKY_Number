@@ -15,7 +15,7 @@ Updated: 2026-11-11. Phase 1 is complete; Phase 2 implementation is substantiall
 
 ## 2 Repair authoritative multiplayer state
 
-Implementation items 2.3–2.6 and 2.8–2.18 are present and compiled. Item 2.7 remains open because the final rehost stamp fix has not passed the integrated authority run; item 2.19 is the outstanding Phase 2 test matrix. See progression.md and docs/validation.md.
+The localhost matrix passed authority, connection lifecycle, active and inactive departures, spectator permissions, and rejection of a cached prior-session turn stamp after rehosting. See progression.md and docs/validation.md.
 
 ### 2A Public roster and private state (G06–G08, G14)
 
@@ -28,7 +28,7 @@ Implementation items 2.3–2.6 and 2.8–2.18 are present and compiled. Item 2.7
 
 ### 2B Validate every state mutation (G07, G10, G15, G17)
 
-- [ ] 2.7 Define session/match/turn identifiers and a single path to validate phase, sender membership, alive status, active turn and allowed action. Consume the authorized roll once. Prevent stale requests from a previous turn/match being reused.
+- [x] 2.7 Define session/match/turn identifiers and a single path to validate phase, sender membership, alive status, active turn and allowed action. Consume the authorized roll once. The localhost matrix verified duplicate rejection and stale requests across turns, matches, and rooms.
 - [x] 2.8 Guard start/rematch with host authority, allowed phase, minimum/maximum players and adopted readiness policy. Prevent mid-match restart RPCs.
 - [x] 2.9 Apply caster alive/role/phase/budget/round-cap checks to all ability RPCs; validate target and timing before spending a charge. Return actionable private rejection feedback.
 - [x] 2.10 Make MatchEnded terminal. Block subsequent moves, effects, votes and timer transitions; separate explicit rematch initialization from ordinary phase updates.
@@ -43,11 +43,11 @@ Implementation items 2.3–2.6 and 2.8–2.18 are present and compiled. Item 2.7
 - [x] 2.16 For LAN support, provide an IP input and deliberate listen address rather than only 127.0.0.1; otherwise label the existing option as same-machine testing. Verify separately from Relay.
 - [x] 2.17 Use a stable round schedule/cursor or remaining-turn queue. Removing a player must not skip the next living player's opportunity. Clear departed players' rolls, votes and pending effects according to docs/rules.md.
 - [x] 2.18 Handle departures only in relevant phases: lobby roster update, active-turn continuation, voting re-evaluation, and defined match-end policy. Avoid applying normal match wins while still in lobby or after a result.
-- [ ] 2.19 Test host plus two clients: matching rosters, targeted role/dice privacy, repeated requests, dead caster, failed connection, active/inactive departure, leave/rejoin and host loss. Exit: record actual outcomes and unresolved defects.
+- [x] 2.19 Test host plus two clients: matching rosters, targeted role/dice privacy, repeated requests, dead caster, failed connection, active/inactive departure, leave/rejoin and host loss. The spectator scenario used six peers. See docs/validation.md.
 
 ## 3 Align the gameplay rules
 
-Implementation checkboxes reflect source-level completion; runtime checks called out in item text remain open unless independently verified.
+Implementation checkboxes reflect source-level completion, not phase acceptance. Runtime checks remain open unless independently recorded in docs/validation.md. The 2026-11-11 review repaired defects in 2.5/3.5, 3.16 and 3.18; see the review regression checkpoint below.
 
 ### 3A Moves skips and wins (G01, G04–G05, G10, G12)
 
@@ -69,7 +69,7 @@ Implementation checkboxes reflect source-level completion; runtime checks called
 - [x] 3.11 Refactor DiceRollGenerator to accept a seeded random source. Cursed rolls use two biasable dice plus one fair die, shuffled before delivery; all values remain 1–6 and curse state is not published.
 - [x] 3.12 Rank unfavorable faces by the best signed move, covering overshoot and near-target cases. Seeded tests check bias frequency; the system does not promise a reachable target.
 - [x] 3.13 Initialize one block and two curse charges per imposter, one shared shift charge, and enforce the configured per-round cap; reset budgets on match initialization.
-- [ ] 3.13a Verify those budgets and rematch resets for host and remote imposters in a multiplayer run.
+- [x] 3.13a Verify those budgets and rematch resets for host and remote imposters in a multiplayer run. The six-peer budget scenario passed with two rematches.
 
 ### 3C Voting and reveal (G02–G03, G16, G19)
 
@@ -85,33 +85,33 @@ Implementation checkboxes reflect source-level completion; runtime checks called
 ## 4 Make the complete match operable through UI
 
 - [x] 4.1 Make LuckyUIManager the single phase router. GameplayController no longer navigates phase panels; it manages only its private dice/ability controls.
-- [ ] 4.2 Bind click callbacks once or remove exact handlers on disable. Hydrate dice, role, charges, roster, phase and history from current state whenever a panel/player binds. Clear dice after the turn and on session exit.
-- [ ] 4.3 Build a private RoleReveal panel with role objective/countdown and connect it to RoleReveal phase. Test event delivery before and after panel activation.
-- [ ] 4.4 Add the ability target picker with stable client-ID data, not IDs parsed from displayed names. Include self when legal. Refresh only when eligibility/profile changes, retaining valid selection.
-- [ ] 4.5 Add the ten-value shift selector and preview; wire every serialized reference in LuckyNumberMaster.unity. Use GameSettings bounds rather than hardcoded UI assumptions.
-- [ ] 4.6 Keep each die value readable even when cursed; use an overlay only if private curse notification is adopted. Show selected value/sign, predicted score, skip balance and disabled-state reason.
-- [ ] 4.7 Lock pending move/ability/vote inputs until server response. Reflect rejection without falsely claiming success; do not let local UI state substitute for authority.
-- [ ] 4.8 Replace lobby per-frame destruction/recreation with stable player-card bindings. Refresh ready/profile state on events; use configured limits, not hardcoded eight.
-- [ ] 4.9 Add scrollable public history available during discussion and voting. Create candidate cards with correct names/portraits, voted status, runoff eligibility and read-only spectator state.
-- [ ] 4.10 Present elimination/results from current outcome snapshots. Prevent click-through, hide illegal controls, and implement clean replay/menu transitions. Test two consecutive rematches and a new connection after leaving.
-- [ ] 4.11 Add visible connection errors and real IP input if LAN remains in scope. Exit: a remote player can complete every action without Inspector access.
+- [x] 4.2 Bind click callbacks once or remove exact handlers on disable. Hydrate dice, role, charges, roster, phase, and history from current snapshots. The localhost UI scenario verified panel reactivation, rematch, and session-exit cleanup.
+- [x] 4.3 Show a private role, objective, and countdown during RoleReveal. The panel hydrates from the owner's current match snapshot, including when the role arrives after activation.
+- [x] 4.4 Offer living players whose turn has yet to start, including self when eligible. Retain selection by client ID when roster or eligibility changes.
+- [x] 4.5 Wire the shift selector and target preview in LuckyNumberMaster.unity. Use the configured nonzero deltas. The localhost UI scenario verified the ten default options and a selected negative shift.
+- [x] 4.6 Show numeric faces for every roll, the selected sign and predicted score, personal skip balance, and pending or unavailable states. Keep curse effects private.
+- [x] 4.7 Guard pending moves, abilities, and ballots until response or context change. Render caller feedback and consume only authoritative state.
+- [x] 4.8 Keep stable lobby cards keyed by client ID. Refresh profile/readiness from events and read configured limits. The UI scenario verified card instance identity across a ready change.
+- [x] 4.9 Keep scrollable public history available in discussion and voting. Candidate cards show names, portraits, ballot status, and runoff eligibility. Ejected players see read-only controls.
+- [x] 4.10 Present elimination/results from outcome snapshots and hide underlying action controls. The localhost UI scenario completed two consecutive rematches and returned to the menu. The session and review scenarios verified leave/rejoin and rehost.
+- [x] 4.11 Display connection status and errors on the main menu and retain same-machine testing under the adopted connection policy. The localhost UI scenario exercised a connected remote player's match controls without Inspector access. Relay and cross-machine acceptance remain in Phase 6.
 
 ## 5 Prepare art and rebuild presentation
 
-- [ ] 5.1 Create docs/asset-inventory.md mapping archive image, existing asset, intended screen, cleanup needed and usage/license attribution status. Verify source rights/credits with the team; do not infer them from generated-looking filenames.
-- [ ] 5.2 Inspect existing portraits/dice/buttons/icons at actual display size. Reuse clean crops; list baked checkerboards, clipped edges, incorrect pips or illegible text needing replacement.
-- [ ] 5.3 Prepare transparent PNG elements with clean alpha and padding using an appropriate image editor. Preserve originals outside runtime imports where useful. JPEG checkerboards cannot be fixed by simply enabling alpha import.
-- [ ] 5.4 Slice consistent sprite bounds/pivots; set Sprite (2D and UI), appropriate filtering/compression, and nine-slice borders for scalable panels/buttons. Create separate numeric TMP labels where source artwork contains unreliable text.
-- [ ] 5.5 Create reusable UI prefabs under Assets/Prefabs/UI for buttons, panels, player cards, dice controls, score header and modals. Define shared colors/type/spacing and normal/hover/pressed/disabled/selected states.
-- [ ] 5.6 Rebuild menu and lobby using plan.md screen requirements. Keep the lounge background subdued behind text; use clean portrait crops and meaningful primary-action hierarchy.
-- [ ] 5.7 Rebuild gameplay header, public player strip/history, private dice region and sabotage drawer. Wire scoreboard art instead of leaving scoreboardImage unused; maintain live numeric text.
-- [ ] 5.8 Rebuild role, discussion, voting, ejection and result views. Preserve history during discussion, enforce modal layering, and distinguish team outcome from local victory/defeat where useful.
-- [ ] 5.9 Add small local roll/selection feedback and public target-change/ejection effects. Never show private curse or ability-user effects to observers. Keep animations from delaying authoritative resolution or input unnecessarily.
-- [ ] 5.10 Retain procedural audio where adequate; trigger accepted-action feedback consistently. Persist volume through PlayerPrefs and restore on launch; update the SAVE & CLOSE behavior/label accordingly.
-- [ ] 5.11 Rewrite How to Play from docs/rules.md, including last-move priority, exact target, skips, abilities, voting and voice policy. Replace unsupported emoji with supplied icons or verified font glyphs.
-- [ ] 5.12 Update LuckyNumberSetupEditor to preserve authored prefabs/scenes or make generation an explicit development-only operation. Ensure it cannot silently overwrite the UI. Validate all serialized references after changes.
-- [ ] 5.13 Inspect every screen at 1280x720, 1920x1080 and a narrower desktop aspect; test eight players, long names, long history and errors. Check keyboard focus, readable text, non-color-only selection, no overlap, no background raycast blocking and no click-through.
-- [ ] 5.14 Record screenshots and defects in docs/validation.md. Exit: all required controls remain readable and usable across supported layouts.
+- [x] 5.1 Create docs/asset-inventory.md mapping archive image, existing asset, intended screen, cleanup needed and usage/license attribution status. The team confirmed original authorship and authorized project use.
+- [x] 5.2 Inspect existing portraits/dice/buttons/icons at actual display size. Reuse clean crops; list baked checkerboards, clipped edges, incorrect pips or illegible text needing replacement.
+- [x] 5.3 Prepare transparent PNG elements with clean alpha and padding using an appropriate image editor. Preserve originals outside runtime imports where useful. JPEG checkerboards cannot be fixed by simply enabling alpha import.
+- [x] 5.4 Slice consistent sprite bounds/pivots; set Sprite (2D and UI), appropriate filtering/compression, and nine-slice borders for scalable panels/buttons. Create separate numeric TMP labels where source artwork contains unreliable text.
+- [x] 5.5 Create reusable UI prefabs under Assets/Prefabs/UI for buttons, panels, player cards, dice controls, score header and modals. Define shared colors/type/spacing and normal/hover/pressed/disabled/selected states.
+- [x] 5.6 Rebuild menu and lobby using plan.md screen requirements. Keep the lounge background subdued behind text; use clean portrait crops and meaningful primary-action hierarchy.
+- [x] 5.7 Rebuild gameplay header, public player strip/history, private dice region and sabotage drawer. Wire scoreboard art instead of leaving scoreboardImage unused; maintain live numeric text.
+- [x] 5.8 Rebuild role, discussion, voting, ejection and result views. Preserve history during discussion, enforce modal layering, and distinguish team outcome from local victory/defeat where useful.
+- [x] 5.9 Add small local roll/selection feedback and public target-change/ejection effects. Never show private curse or ability-user effects to observers. Keep animations from delaying authoritative resolution or input unnecessarily.
+- [x] 5.10 Retain procedural audio where adequate; trigger accepted-action feedback consistently. Persist volume through PlayerPrefs and restore on launch; update the SAVE & CLOSE behavior/label accordingly.
+- [x] 5.11 Rewrite How to Play from docs/rules.md, including last-move priority, exact target, skips, abilities, voting and voice policy. Replace unsupported emoji with supplied icons or verified font glyphs.
+- [x] 5.12 Update LuckyNumberSetupEditor to preserve authored prefabs/scenes or make generation an explicit development-only operation. Ensure it cannot silently overwrite the UI. Validate all serialized references after changes.
+- [x] 5.13 Inspect every screen at 1280x720, 1920x1080 and a narrower desktop aspect; test eight players, long names, long history and errors. Check keyboard focus, readable text, non-color-only selection, no overlap, no background raycast blocking and no click-through.
+- [x] 5.14 Record screenshots and defects in docs/validation.md. Exit: all required controls remain readable and usable across supported layouts.
 
 ## 6 Validate balance and release
 
@@ -123,9 +123,20 @@ Implementation checkboxes reflect source-level completion; runtime checks called
 - [ ] 6.6 Tune one balance group at a time in DefaultGameSettings.asset, update docs/rules.md, and repeat affected scenarios. Do not treat one successful match as balance proof.
 - [ ] 6.7 Optional only: implement feature-flagged adaptive dice and shift reachability protection after core acceptance. Define feasible distances over remaining signed moves; test zero moves, zero gap, close targets and sabotage interactions. Preserve at least one viable offered option when enabled without forcing players to choose it; document guided randomness honestly.
 - [ ] 6.8 Build the chosen platform with only intended scenes. Test a clean launch outside the editor and actual room connection between machines. Record exact build version and results.
-- [ ] 6.9 Prepare README with launch/join steps, controls, host requirements, external voice rules if used, known limitations, and credits. Exclude credentials and private machine paths from shared docs.
+- [x] 6.9 Prepare README with launch/join steps, controls, host requirements, external voice rules if used, known limitations, and credits. Exclude credentials and private machine paths from shared docs.
 - [ ] 6.10 Review git diff, update progression.md with actual completed/partial work, unresolved defects, tests run and next actions. Ship only after plan.md's jam completion criteria pass, or explicitly document agreed cuts.
 
 ## Working discipline
 
-After each small milestone, check account usage and update progression.md. If any applicable active quota window reaches 10% remaining, stop implementation and write the handoff. Check boxes only after implementation and the listed validation have actually completed. Failed or unrun checks remain visible; optional/deferred work is marked as such rather than checked off.
+After each small milestone, check account usage and update progression.md. The default reserve is 10% remaining. Apply any chat-specific override only in the chat where the user gives it. At the applicable threshold, stop implementation and write the handoff. Check implementation boxes when source work is complete. Check test and acceptance boxes after the named checks pass. Keep failed and unrun checks visible and mark optional work as deferred when appropriate.
+
+## Review regression checkpoint (2026-11-11)
+
+- [x] Reopen each runoff ballot; replicate runoff number and preserve restricted candidates.
+- [x] Remove the Lucky Shift caster from public network events and feed text.
+- [x] Lock a winning vote result, show its role reveal, then transition to results; reject gameplay during the reveal.
+- [x] Clear skip ballots on reset and restore public-history snapshot on panel rebinding.
+- [x] Focused three-process localhost review regression passed on 2026-11-11, including second-room rehost, private views, anonymous shift payload/text, accepting runoffs and winning reveal/results. See docs/validation.md.
+- [x] Complete remaining Phase 2 authority/session/departure/spectator checks and 3.13a budget/rematch checks. See the continuation results in docs/validation.md.
+
+The missing ability selectors, role screen, stable lobby cards, UI polish and release checks remain in their original phases. Do not treat those known open items as completed by these repairs.

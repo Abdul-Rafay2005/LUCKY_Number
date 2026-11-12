@@ -70,6 +70,7 @@ namespace LuckyNumber.Network
     public struct VoteOutcomeSnapshot : INetworkSerializable, IEquatable<VoteOutcomeSnapshot>
     {
         public VoteOutcomeKind Kind;
+        public int RunoffBallot;
         public ActionStamp Stamp;
         public ulong PlayerId;
         public FixedString64Bytes PlayerName;
@@ -79,6 +80,7 @@ namespace LuckyNumber.Network
         public void NetworkSerialize<T>(BufferSerializer<T> serializer) where T : IReaderWriter
         {
             serializer.SerializeValue(ref Kind);
+            serializer.SerializeValue(ref RunoffBallot);
             serializer.SerializeValue(ref Stamp);
             serializer.SerializeValue(ref PlayerId);
             serializer.SerializeValue(ref PlayerName);
@@ -86,7 +88,7 @@ namespace LuckyNumber.Network
             serializer.SerializeValue(ref Message);
         }
 
-        public bool Equals(VoteOutcomeSnapshot other) => Kind == other.Kind && Stamp.Equals(other.Stamp) &&
+        public bool Equals(VoteOutcomeSnapshot other) => Kind == other.Kind && RunoffBallot == other.RunoffBallot && Stamp.Equals(other.Stamp) &&
             PlayerId == other.PlayerId && PlayerName.Equals(other.PlayerName) && PlayerRole == other.PlayerRole &&
             Message.Equals(other.Message);
     }
@@ -117,6 +119,7 @@ namespace LuckyNumber.Network
     internal struct PlayerSecret : INetworkSerializeByMemcpy, IEquatable<PlayerSecret>
     {
         public bool HasRole;
+        public uint MatchId;
         public PlayerRole Role;
         public int BlockCharges;
         public int ShiftCharges;
@@ -126,7 +129,7 @@ namespace LuckyNumber.Network
         public FixedList128Bytes<ulong> KnownImposters;
 
         public bool Equals(PlayerSecret other) =>
-            HasRole == other.HasRole && Role == other.Role && BlockCharges == other.BlockCharges &&
+            HasRole == other.HasRole && MatchId == other.MatchId && Role == other.Role && BlockCharges == other.BlockCharges &&
             ShiftCharges == other.ShiftCharges && CurseCharges == other.CurseCharges && LastAbilityRound == other.LastAbilityRound &&
             AbilityUsesThisRound == other.AbilityUsesThisRound &&
             KnownImposters.Equals(other.KnownImposters);

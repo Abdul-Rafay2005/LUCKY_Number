@@ -14,24 +14,17 @@ using LuckyNumber.UI;
 
 namespace LuckyNumber.Editor
 {
-    [InitializeOnLoad]
-    public static class LuckyNumberSetupEditor
+    public static partial class LuckyNumberSetupEditor
     {
-        static LuckyNumberSetupEditor()
-        {
-            EditorApplication.delayCall += () =>
-            {
-                // Auto-run setup if master scene does not exist yet
-                if (!File.Exists("Assets/Scenes/LuckyNumberMaster.unity"))
-                {
-                    GenerateCompleteGameSetup();
-                }
-            };
-        }
-
-        [MenuItem("Lucky Number/Generate Complete Game Setup", false, 1)]
+        [MenuItem("Lucky Number/Development/Generate Missing Game Setup", false, 20)]
         public static void GenerateCompleteGameSetup()
         {
+            if (File.Exists(MasterScenePath))
+            {
+                Debug.LogWarning("The authored master scene already exists. No setup assets were generated.");
+                return;
+            }
+
             Debug.Log("[LuckyNumberSetupEditor] Beginning automated project setup...");
 
             EnsureDirectories();
@@ -122,6 +115,12 @@ namespace LuckyNumber.Editor
             var nTmp = nameObj.GetComponent<TextMeshProUGUI>();
             nTmp.text = "Player Name";
             nTmp.fontSize = 20;
+            nTmp.enableAutoSizing = true;
+            nTmp.fontSizeMin = 16;
+            nTmp.fontSizeMax = 20;
+            nTmp.textWrappingMode = TextWrappingModes.NoWrap;
+            nTmp.overflowMode = TextOverflowModes.Ellipsis;
+            nTmp.richText = false;
             nTmp.color = Color.white;
             nTmp.alignment = TextAlignmentOptions.MidlineLeft;
 
@@ -235,9 +234,149 @@ namespace LuckyNumber.Editor
             uiSo.FindProperty("howToPlayModal").objectReferenceValue = howToPlayModal;
             uiSo.FindProperty("settingsModal").objectReferenceValue = settingsModal;
             uiSo.ApplyModifiedProperties();
+            WireMatchControls(uiManager);
+            ApplyPresentation(uiManager);
 
             // Save Scene
             EditorSceneManager.SaveScene(scene, "Assets/Scenes/LuckyNumberMaster.unity");
+        }
+
+        [MenuItem("Lucky Number/Development/Update Master Scene Match Controls", false, 21)]
+        public static void UpdateMasterSceneMatchControls()
+        {
+            if (!Application.isBatchMode && !EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo()) return;
+            var scene = EditorSceneManager.OpenScene("Assets/Scenes/LuckyNumberMaster.unity");
+            var manager = UnityEngine.Object.FindFirstObjectByType<LuckyUIManager>();
+            WireMatchControls(manager);
+            ApplyPresentation(manager);
+            EditorSceneManager.SaveScene(scene);
+        }
+
+        private static void WireMatchControls(LuckyUIManager manager)
+        {
+            var ui = new SerializedObject(manager);
+            if (ui.FindProperty("roleRevealPanel").objectReferenceValue == null)
+            {
+                var role = CreateCardBox("RoleRevealPanel", manager.transform, new Vector2(0.5f, 0.5f), new Vector2(760, 360));
+                CreateText("Heading", role.transform, "YOUR PRIVATE ROLE", 24, Color.white, new Vector2(0.5f, 0.85f), new Vector2(620, 40));
+                ui.FindProperty("roleRevealPanel").objectReferenceValue = role;
+                ui.FindProperty("roleNameText").objectReferenceValue = CreateText("Role", role.transform, "", 54, Color.yellow, new Vector2(0.5f, 0.64f), new Vector2(660, 72));
+                ui.FindProperty("roleObjectiveText").objectReferenceValue = CreateText("Objective", role.transform, "", 28, Color.white, new Vector2(0.5f, 0.39f), new Vector2(620, 116));
+                ui.FindProperty("roleTimerText").objectReferenceValue = CreateText("Countdown", role.transform, "", 28, Color.cyan, new Vector2(0.5f, 0.13f), new Vector2(180, 42));
+                role.SetActive(false);
+                ui.ApplyModifiedProperties();
+            }
+            var roleObjective = (TMP_Text)ui.FindProperty("roleObjectiveText").objectReferenceValue;
+            roleObjective.rectTransform.anchorMin = roleObjective.rectTransform.anchorMax = new Vector2(0.5f, 0.39f);
+            roleObjective.rectTransform.sizeDelta = new Vector2(620, 116);
+
+            var gameplay = (GameObject)ui.FindProperty("gameplayPanel").objectReferenceValue;
+            var controls = new SerializedObject(gameplay.GetComponent<GameplayController>());
+            var drawer = (GameObject)controls.FindProperty("imposterDrawer").objectReferenceValue;
+            controls.FindProperty("abilityStatusText").objectReferenceValue = drawer.transform.Find("ImpTitle").GetComponent<TMP_Text>();
+            if (controls.FindProperty("abilityTargetDropdown").objectReferenceValue == null)
+            {
+                var parent = drawer.transform;
+                parent.Find("ImpTitle").GetComponent<TMP_Text>().text = "SABOTAGE";
+                controls.FindProperty("abilityTargetDropdown").objectReferenceValue =
+                    CreateMatchDropdown("AbilityTarget", parent, new Vector2(0.52f, 0.76f), 210, "Upcoming player");
+                controls.FindProperty("luckyShiftDropdown").objectReferenceValue =
+                    CreateMatchDropdown("ShiftDelta", parent, new Vector2(0.77f, 0.76f), 86, "Shift");
+                controls.FindProperty("luckyShiftDeltaText").objectReferenceValue =
+                    CreateText("ShiftPreview", parent, "", 17, Color.white, new Vector2(0.9f, 0.35f), new Vector2(118, 40));
+                parent.Find("LuckyShiftBtn").GetComponent<RectTransform>().anchorMin =
+                    parent.Find("LuckyShiftBtn").GetComponent<RectTransform>().anchorMax = new Vector2(0.66f, 0.35f);
+                parent.Find("CursedDiceBtn").GetComponent<RectTransform>().anchorMin =
+                    parent.Find("CursedDiceBtn").GetComponent<RectTransform>().anchorMax = new Vector2(0.42f, 0.35f);
+                drawer.SetActive(false);
+            }
+
+            var dice = (GameObject)controls.FindProperty("dicePanel").objectReferenceValue;
+            for (int i = 0; i < 3; i++)
+            {
+                var die = dice.transform.Find($"DieBtn_{i}");
+                var label = die.GetComponentInChildren<TMP_Text>(true);
+                label.fontSize = 22;
+                label.rectTransform.anchorMin = label.rectTransform.anchorMax = new Vector2(0.5f, -0.15f);
+                label.rectTransform.sizeDelta = new Vector2(50, 26);
+                label.raycastTarget = false;
+            }
+            WireScrollableHistory(controls);
+            controls.ApplyModifiedProperties();
+
+            var voting = (GameObject)ui.FindProperty("votingPanel").objectReferenceValue;
+            var discussion = (GameObject)ui.FindProperty("discussionPanel").objectReferenceValue;
+            voting.transform.Find("SkipVoteBtn").GetComponentInChildren<TMP_Text>().text = "SKIP EJECTION";
+            var grid = voting.transform.Find("VotingGrid").GetComponent<RectTransform>();
+            grid.anchorMin = new Vector2(0.3f, 0.24f);
+            grid.anchorMax = new Vector2(0.94f, 0.68f);
+            grid.GetComponent<GridLayoutGroup>().constraint = GridLayoutGroup.Constraint.FixedColumnCount;
+            grid.GetComponent<GridLayoutGroup>().constraintCount = 3;
+            MoveHeading(voting.transform.Find("VTitle"), "CAST YOUR VOTE", 0.8f);
+            MoveHeading(voting.transform.Find("VTimer"), "25s", 0.73f);
+            MoveHeading(discussion.transform.Find("DTitle"), "DISCUSSION", 0.8f);
+            MoveHeading(discussion.transform.Find("DSub"), "Discuss the match before voting starts.", 0.72f);
+            MoveHeading(discussion.transform.Find("DTimer"), "45s", 0.61f);
+
+            var menu = (GameObject)ui.FindProperty("mainMenuPanel").objectReferenceValue;
+            menu.transform.Find("OnlineMatchCard/LocalSep").GetComponent<TMP_Text>().text = "SAME-MACHINE TESTING";
+        }
+
+        private static void MoveHeading(Transform heading, string text, float verticalAnchor)
+        {
+            var label = heading.GetComponent<TMP_Text>();
+            label.text = text;
+            label.raycastTarget = false;
+            label.rectTransform.anchorMin = label.rectTransform.anchorMax = new Vector2(0.62f, verticalAnchor);
+        }
+
+        private static TMP_Dropdown CreateMatchDropdown(string name, Transform parent, Vector2 anchor, float width, string placeholder)
+        {
+            var resources = new TMP_DefaultControls.Resources
+            {
+                standard = AssetDatabase.GetBuiltinExtraResource<Sprite>("UI/Skin/UISprite.psd"),
+                background = AssetDatabase.GetBuiltinExtraResource<Sprite>("UI/Skin/Background.psd"),
+                checkmark = AssetDatabase.GetBuiltinExtraResource<Sprite>("UI/Skin/Checkmark.psd"),
+                dropdown = AssetDatabase.GetBuiltinExtraResource<Sprite>("UI/Skin/DropdownArrow.psd"),
+                mask = AssetDatabase.GetBuiltinExtraResource<Sprite>("UI/Skin/UIMask.psd")
+            };
+            var view = TMP_DefaultControls.CreateDropdown(resources);
+            view.name = name;
+            view.transform.SetParent(parent, false);
+            var rect = view.GetComponent<RectTransform>();
+            rect.anchorMin = rect.anchorMax = anchor;
+            rect.sizeDelta = new Vector2(width, 36);
+            var dropdown = view.GetComponent<TMP_Dropdown>();
+            dropdown.ClearOptions();
+            dropdown.captionText.text = placeholder;
+            return dropdown;
+        }
+
+        private static void WireScrollableHistory(SerializedObject controls)
+        {
+            if (controls.FindProperty("moveHistoryScroll").objectReferenceValue != null) return;
+            var text = (TMP_Text)controls.FindProperty("moveHistoryText").objectReferenceValue;
+            var viewport = CreateUIElement("HistoryViewport", text.transform.parent);
+            var rect = viewport.GetComponent<RectTransform>();
+            rect.anchorMin = rect.anchorMax = new Vector2(0.5f, 0.45f);
+            rect.sizeDelta = new Vector2(285, 400);
+            viewport.AddComponent<Image>().color = Color.clear;
+            viewport.AddComponent<RectMask2D>();
+            var scroll = viewport.AddComponent<ScrollRect>();
+            text.transform.SetParent(viewport.transform, false);
+            text.rectTransform.anchorMin = new Vector2(0, 1);
+            text.rectTransform.anchorMax = Vector2.one;
+            text.rectTransform.pivot = new Vector2(0.5f, 1);
+            text.rectTransform.anchoredPosition = Vector2.zero;
+            text.rectTransform.sizeDelta = Vector2.zero;
+            text.raycastTarget = false;
+            text.gameObject.AddComponent<ContentSizeFitter>().verticalFit = ContentSizeFitter.FitMode.PreferredSize;
+            scroll.viewport = rect;
+            scroll.content = text.rectTransform;
+            scroll.horizontal = false;
+            scroll.movementType = ScrollRect.MovementType.Clamped;
+            scroll.scrollSensitivity = 24f;
+            controls.FindProperty("moveHistoryScroll").objectReferenceValue = scroll;
         }
 
         private static GameObject CreateMainMenuPanel(Transform parent, Sprite[] portraits)
